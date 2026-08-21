@@ -46,3 +46,4 @@ next-env.d.ts
 
 # local dev artifacts
 convex-dev.log
+.clerk/
