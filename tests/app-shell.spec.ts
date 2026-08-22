@@ -18,6 +18,11 @@ test("signed-out /history redirects to sign-in", async ({ request }) => {
   expect(res.url()).toContain("/sign-in");
 });
 
+test("signed-out /settings/accounts redirects to sign-in", async ({ request }) => {
+  const res = await request.get("/settings/accounts");
+  expect(res.url()).toContain("/sign-in");
+});
+
 test("webhook endpoint stays public despite protection", async ({ request }) => {
   // Public per clerk-webhooks skill: no auth redirect, straight into the
   // handler (which rejects us on missing svix headers -> 400).
