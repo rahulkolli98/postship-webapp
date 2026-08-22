@@ -1,5 +1,22 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { QueryCtx, MutationCtx } from "./_generated/server";
+
+/**
+ * Shared helper (PRD § 4): resolve the Clerk identity to the Convex users
+ * record. Every authenticated function calls this first. Returns null when
+ * signed out or when the webhook hasn't created the row yet.
+ */
+export async function getCurrentUser(ctx: QueryCtx | MutationCtx) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (identity === null) {
+    return null;
+  }
+  return ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+    .unique();
+}
 
 /**
  * PRD § 4: users.current (TASK-020)
