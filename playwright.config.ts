@@ -32,6 +32,12 @@ export default defineConfig({
     url: "http://localhost:3001",
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
+    // Tests exercise the webhook's rejection paths. The dummy secret makes
+    // svix verification run (and fail) rather than short-circuiting on the
+    // missing-secret guard — production never sets this fake value.
+    env: {
+      CLERK_WEBHOOK_SECRET: "whsec_test_dummy_secret_for_rejection_paths",
+    },
   },
   projects: [
     {
