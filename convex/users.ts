@@ -1,5 +1,33 @@
-import { mutation } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+
+/**
+ * PRD § 4: users.current (TASK-020)
+ *
+ * Returns the Convex user record for the currently authenticated Clerk
+ * identity, or null when signed out. The identity comes from the Clerk JWT
+ * validated via convex/auth.config.ts; `identity.subject` IS the Clerk user
+ * id (`user_...`) that upsertFromClerk stores as clerkUserId.
+ *
+ * Client components calling this must sit under <Authenticated> (or guard
+ * with useConvexAuth()) — otherwise it throws on page load per Convex docs.
+ */
+export const current = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) {
+      return null;
+    }
+
+    return await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+  },
+});
 
 /**
  * PRD § 4: users.upsertFromClerk
