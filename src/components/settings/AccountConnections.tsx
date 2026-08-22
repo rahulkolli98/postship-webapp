@@ -1,8 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Authenticated, useQuery } from "convex/react";
+import { Authenticated, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 /**
  * Account connections panel — TASK-026 (PRD § 8 Screen: Settings - Accounts).
@@ -35,6 +46,8 @@ export function AccountConnections() {
 
 function Panel() {
   const accounts = useQuery(api.accounts.list);
+  const disconnectPlatform = useMutation(api.accounts.disconnect);
+  const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState(false);
 
   const loading = accounts === undefined;
@@ -44,6 +57,19 @@ function Panel() {
   function handleConnect() {
     // TODO(TASK-053): window.location.href = "/api/oauth/postforme/start"
     setNotice(true);
+  }
+
+  function handleDisconnect(platform: string) {
+    void disconnectPlatform({
+      platform: platform as
+        | "youtube"
+        | "linkedin"
+        | "x"
+        | "threads"
+        | "instagram"
+        | "tiktok",
+    });
+    setPending(null);
   }
 
   return (
@@ -76,14 +102,50 @@ function Panel() {
                 {connected.map((a) => (
                   <li
                     key={a._id}
-                    className="rounded-md border border-border bg-surface-raised px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface"
+                    className="flex items-center gap-1 rounded-md border border-border bg-surface-raised px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface"
                   >
                     {PLATFORM_LABELS[a.platform] ?? a.platform}
                     {a.platformDisplayName ? (
-                      <span className="ml-2 text-on-surface-muted">
+                      <span className="text-on-surface-muted">
                         {a.platformDisplayName}
                       </span>
                     ) : null}
+                    <AlertDialog
+                      open={pending === a.platform}
+                      onOpenChange={(o) => setPending(o ? a.platform : null)}
+                    >
+                      <AlertDialogTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`Disconnect ${PLATFORM_LABELS[a.platform] ?? a.platform}`}
+                          data-testid={`disconnect-${a.platform}`}
+                          className="ml-1 rounded-sm px-1 text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error"
+                        >
+                          ×
+                        </button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            Disconnect {PLATFORM_LABELS[a.platform] ?? a.platform}?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Postship will stop publishing to this platform. You
+                            can reconnect anytime, and your drafts are not
+                            deleted.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleDisconnect(a.platform)}
+                            className="bg-destructive text-white hover:bg-destructive/90"
+                          >
+                            Disconnect
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </li>
                 ))}
               </ul>

@@ -1,6 +1,15 @@
-import { query } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentUser } from "./users";
+
+const PLATFORM = v.union(
+  v.literal("youtube"),
+  v.literal("linkedin"),
+  v.literal("x"),
+  v.literal("threads"),
+  v.literal("instagram"),
+  v.literal("tiktok"),
+);
 
 /**
  * PRD § 4: accounts.list (TASK-024)
@@ -52,5 +61,60 @@ export const list = query({
         connectedAt,
       }))
       .sort((a, b) => b.connectedAt - a.connectedAt);
+  },
+});
+
+/**
+ * PRD § 4: accounts.disconnect (TASK-027)
+ *
+ * Removes one connected platform. Auth-guarded: resolves the caller via
+ * getCurrentUser and only deletes rows belonging to them.
+ */
+export const disconnect = mutation({
+  args: { platform: PLATFORM },
+  returns: v.null(),
+  handler: async (ctx, { platform }) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      throw new Error("Not authenticated");
+    }
+
+    const account = await ctx.db
+      .query("accounts")
+      .withIndex("by_userId_platform", (q) =>
+        q.eq("userId", user._id).eq("platform", platform),
+      )
+      .first();
+
+    if (account !== null) {
+      await ctx.db.delete(account._id);
+    }
+    return null;
+  },
+});
+
+/**
+ * v1 brand-level disconnect (roadmap TASK-027 notes): the Post for Me
+ * connection is one brand covering up to six platform rows, so the UI's
+ * "Disconnect all" removes every row for the caller in one go.
+ */
+export const disconnectAll = mutation({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      throw new Error("Not authenticated");
+    }
+
+    const rows = await ctx.db
+      .query("accounts")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+    return rows.length;
   },
 });
