@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { Webhook, type WebhookRequiredHeaders } from "svix";
+import type { NextRequest } from "next/server";
+import { verifyWebhook } from "@clerk/nextjs/webhooks";
 import type { WebhookEvent } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/../convex/_generated/api";
@@ -9,20 +10,19 @@ import { api } from "@/../convex/_generated/api";
  *
  * Flow:
  *   1. Clerk POSTs a signed event to /api/webhooks/clerk.
- *   2. We verify the svix signature against CLERK_WEBHOOK_SECRET
- *      (Clerk Dashboard → Webhooks → Signing Secret). Fail closed when the
- *      secret is missing — an unverified webhook must never touch Convex.
- *   3. On `user.created` (and `user.updated`, same idempotent path), we call
- *      the Convex `users.upsertFromClerk` mutation, which dedupes by
- *      clerkUserId and starts the trial clock for new records.
+ *   2. `verifyWebhook(req)` validates the svix signature using the
+ *      CLERK_WEBHOOK_SIGNING_SECRET env var (from the endpoint's Signing
+ *      Secret in the Clerk Dashboard). It throws on bad/missing signatures,
+ *      so an unverified webhook never touches Convex.
+ *   3. On `user.created` / `user.updated` we call the Convex
+ *      `users.upsertFromClerk` mutation, which dedupes by clerkUserId and
+ *      starts the trial clock for new records. Other event types are
+ *      acknowledged with 200 so Clerk doesn't retry them forever.
  *
  * This route is intentionally public (PRD: `/api/webhooks/*` bypasses auth);
- * the svix signature IS the authentication.
- *
- * Local verification without a public tunnel is limited to negative tests
- * (missing/garbage signature → 400). The positive path fires once the app
- * is claimed (`npx clerk auth login`) and the webhook endpoint is registered
- * in the Clerk Dashboard pointing at this URL.
+ * the svix signature IS the authentication. Local dev testing uses Clerk's
+ * first-party relay (`npx clerk webhooks listen --forward-to ...`) — no
+ * third-party tunnel needed.
  */
 
 // Module-scope singleton, same pattern as landing's /api/waitlist route.
@@ -58,49 +58,23 @@ function extractUserFields(data: ClerkUserEventData) {
   };
 }
 
-export async function POST(request: Request) {
-  const secret = process.env.CLERK_WEBHOOK_SECRET;
-  if (!secret) {
-    // Fail closed: never process unsigned webhooks. Same philosophy as the
-    // Turnstile check in landing's waitlist route.
-    console.error("[clerk-webhook] CLERK_WEBHOOK_SECRET is not set");
-    return NextResponse.json(
-      { ok: false, error: "Webhook not configured" },
-      { status: 500 },
-    );
-  }
-
-  const headers: WebhookRequiredHeaders = {
-    "svix-id": request.headers.get("svix-id") ?? "",
-    "svix-timestamp": request.headers.get("svix-timestamp") ?? "",
-    "svix-signature": request.headers.get("svix-signature") ?? "",
-  };
-
-  if (!headers["svix-id"] || !headers["svix-timestamp"] || !headers["svix-signature"]) {
-    return NextResponse.json(
-      { ok: false, error: "Missing svix headers" },
-      { status: 400 },
-    );
-  }
-
-  let payload: string;
-  try {
-    payload = await request.text();
-  } catch {
-    return NextResponse.json({ ok: false, error: "Unreadable body" }, { status: 400 });
-  }
-
+export async function POST(request: NextRequest) {
   let event: WebhookEvent;
   try {
-    const wh = new Webhook(secret);
-    event = wh.verify(payload, headers) as WebhookEvent;
-  } catch {
-    // Bad signature — do not leak verification details to the caller.
-    return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 400 });
+    // Reads CLERK_WEBHOOK_SIGNING_SECRET from env; throws on any
+    // verification failure (missing secret, bad headers, bad signature).
+    event = await verifyWebhook(request);
+  } catch (err) {
+    if (!process.env.CLERK_WEBHOOK_SIGNING_SECRET) {
+      console.error("[clerk-webhook] CLERK_WEBHOOK_SIGNING_SECRET is not set");
+    } else {
+      console.error("[clerk-webhook] Verification failed:", err);
+    }
+    // Do not leak verification details to the caller.
+    return NextResponse.json({ ok: false, error: "Verification failed" }, { status: 400 });
   }
 
   if (event.type !== "user.created" && event.type !== "user.updated") {
-    // Acknowledge unhandled event types so Clerk doesn't retry them forever.
     return NextResponse.json({ ok: true, handled: false, type: event.type });
   }
 
