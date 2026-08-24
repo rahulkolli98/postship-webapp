@@ -34,6 +34,7 @@ type Env = {
   readonly DEEPSEEK_API_KEY: string | undefined;
   readonly OPENAI_API_KEY: string | undefined;
   readonly OPENROUTER_API_KEY: string | undefined;
+  readonly OPENROUTER_MODEL: string | undefined;
 };
 
 /**

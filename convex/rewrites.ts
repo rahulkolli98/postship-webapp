@@ -5,12 +5,14 @@ import { v } from "convex/values";
 import { env } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { PROMPTS, type Platform } from "../src/lib/ai/prompts";
-import { generateWithOpenRouter, OPENROUTER_MODEL } from "../src/lib/ai/openrouter";
+import { generateWithOpenRouter } from "../src/lib/ai/openrouter";
 
 /**
  * rewrites.generate — TASK-043 (PRD § 4 FR-005).
  *
- * Dev: all platforms via OpenRouter thinkingmachines/inkling:free.
+ * Dev: all platforms via OpenRouter. Model is env-configurable:
+ *   npx convex env set OPENROUTER_MODEL <model>   (optional; code default
+ *   is src/lib/ai/openrouter.ts OPENROUTER_MODEL_DEFAULT).
  * Prod: swap provider by changing only src/lib/ai/openrouter.ts + env
  * (DeepSeek for 5, OpenAI gpt-4o-mini for YouTube title per PRD).
  *
@@ -56,12 +58,14 @@ async function generateForPlatform(
   masterDescription: string,
   platform: Platform,
   apiKey: string,
+  model: string | undefined,
 ): Promise<string> {
   const prompt = PROMPTS[platform];
   const raw = await withRetry(() =>
     generateWithOpenRouter(apiKey, {
       system: prompt.system,
       user: prompt.buildUser(masterDescription),
+      model,
     }),
   );
   return raw;
@@ -105,6 +109,8 @@ export const generate = action({
         "AI not configured: set OPENROUTER_API_KEY (or legacy DEEPSEEK/OPENAI keys) via `npx convex env set` and in .env.local",
       );
     }
+    // Optional model override; undefined → code default in openrouter.ts.
+    const model = env.OPENROUTER_MODEL ?? undefined;
 
     const requested = (args.platforms as Platform[] | undefined) ?? [
       "youtube",
@@ -117,7 +123,7 @@ export const generate = action({
 
     // YouTube is JSON-structured; others are plain strings.
     const youtubeRaw = requested.includes("youtube")
-      ? await generateForPlatform(args.masterDescription, "youtube", apiKey)
+      ? await generateForPlatform(args.masterDescription, "youtube", apiKey, model)
       : "";
 
     // Parallel for the other five (or fewer if platforms subset).
@@ -126,7 +132,10 @@ export const generate = action({
       "youtube"
     >[];
     const otherResults = await Promise.all(
-      otherPlatforms.map(async (p) => [p, await generateForPlatform(args.masterDescription, p, apiKey)] as const),
+      otherPlatforms.map(
+        async (p) =>
+          [p, await generateForPlatform(args.masterDescription, p, apiKey, model)] as const,
+      ),
     );
     const otherMap = Object.fromEntries(otherResults) as Record<string, string>;
 
@@ -148,8 +157,6 @@ export const generate = action({
         youtube = { title: youtubeRaw.slice(0, 60), description: youtubeRaw, tags: [] };
       }
     }
-
-    void OPENROUTER_MODEL; // keep import used if prompts change model
 
     return {
       youtube,

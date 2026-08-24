@@ -14,7 +14,11 @@
  */
 import OpenAI from "openai";
 
-export const OPENROUTER_MODEL = "thinkingmachines/inkling:free";
+/**
+ * Default model when OPENROUTER_MODEL env is unset. Switch models anytime
+ * with `npx convex env set OPENROUTER_MODEL <model>` — no code change.
+ */
+export const OPENROUTER_MODEL_DEFAULT = "nvidia/nemotron-3.5-lightning:free";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export function createOpenRouterClient(apiKey: string) {
@@ -35,11 +39,11 @@ export function createOpenRouterClient(apiKey: string) {
  */
 export async function generateWithOpenRouter(
   apiKey: string,
-  opts: { system: string; user: string },
+  opts: { system: string; user: string; model?: string },
 ): Promise<string> {
   const client = createOpenRouterClient(apiKey);
   const res = await client.chat.completions.create({
-    model: OPENROUTER_MODEL,
+    model: opts.model ?? OPENROUTER_MODEL_DEFAULT,
     messages: [
       { role: "system", content: opts.system },
       { role: "user", content: opts.user },

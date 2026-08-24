@@ -16,6 +16,7 @@ import { v } from "convex/values";
 export default defineApp({
   env: {
     OPENROUTER_API_KEY: v.optional(v.string()),
+    OPENROUTER_MODEL: v.optional(v.string()),
     DEEPSEEK_API_KEY: v.optional(v.string()),
     OPENAI_API_KEY: v.optional(v.string()),
     CLERK_JWT_ISSUER_DOMAIN: v.optional(v.string()),
