@@ -22,7 +22,7 @@ const MAX_FILES = 2;
 const ACCEPTED_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm"]);
 const ACCEPT_ATTR = ".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm";
 
-type UploadedFile = {
+export type UploadedFile = {
   storageId: Id<"_storage">;
   filename: string;
   blobUrl: string; // local preview
@@ -48,13 +48,29 @@ function validateFiles(
   return { valid: incoming, error: null };
 }
 
-export function VideoUploader() {
+export function VideoUploader({
+  onFilesChange,
+}: {
+  /** Live mirror of uploaded files — parent uses it for pairing dropdowns + posts.create. */
+  onFilesChange?: (files: UploadedFile[]) => void;
+} = {}) {
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Notify parent whenever files change (callback kept in a ref so we don't
+  // re-fire when the parent re-renders with a new closure).
+  const onFilesChangeRef = useRef(onFilesChange);
+  useEffect(() => {
+    onFilesChangeRef.current = onFilesChange;
+  });
+  useEffect(() => {
+    onFilesChangeRef.current?.(files);
+     
+  }, [files]);
 
   // Revoke blob URLs on unmount / replace.
   useEffect(() => {

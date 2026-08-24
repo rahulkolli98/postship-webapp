@@ -5,17 +5,36 @@ import { useState } from "react";
 import { Authenticated, AuthLoading, useAction, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { TrialCounter } from "./TrialCounter";
-import { VideoUploader } from "./VideoUploader";
+import { VideoUploader, type UploadedFile } from "./VideoUploader";
 import { MasterDescription } from "./MasterDescription";
+import { PlatformCard, YouTubeCard, type Platform, type VideoOption } from "./PlatformCard";
 
 /**
- * Composer — TASK-023 (empty state).
+ * Composer — TASK-023 (empty state) → TASK-045 (full wiring).
  *
  * The single-screen canvas per PRD § 8 / design3: cream substrate
- * (--color-surface), display headline, and until at least one platform is
- * connected, a "Connect platforms" CTA pointing at Settings → Accounts
- * (the real Post for Me OAuth flow is TASK-053).
+ * (--color-surface). Upload → master description → Generate → six editable
+ * PlatformCards with per-platform video pairing. Connection is only needed
+ * to Ship; upload/generate work with zero platforms connected.
  */
+
+type Rewrites = {
+  youtube: { title: string; description: string; tags: string[] };
+  linkedin: string;
+  x: string;
+  threads: string;
+  instagram: string;
+  tiktok: string;
+};
+
+const ALL_PLATFORMS = [
+  "youtube",
+  "linkedin",
+  "x",
+  "threads",
+  "instagram",
+  "tiktok",
+] as const satisfies readonly Platform[];
 
 const PLATFORM_LABELS: Record<string, string> = {
   youtube: "YouTube",
@@ -57,17 +76,35 @@ function ComposerCanvas() {
   const [generateError, setGenerateError] = useState<string | null>(null);
   // Ephemeral until posts.create (TASK-049) persists drafts. A future `drafts`
   // table (noted in docs/project-context.md) will make this survive refresh.
-  const [rewrites, setRewrites] = useState<null | {
-    youtube: { title: string; description: string; tags: string[] };
-    linkedin: string;
-    x: string;
-    threads: string;
-    instagram: string;
-    tiktok: string;
-  }>(null);
+  const [rewrites, setRewrites] = useState<Rewrites | null>(null);
+  // Live mirror of VideoUploader state (TASK-045): feeds pairing dropdowns
+  // and, later, posts.create.
+  const [uploads, setUploads] = useState<UploadedFile[]>([]);
+  // Per-platform selected video storageId.
+  const [pairings, setPairings] = useState<Partial<Record<Platform, string>>>({});
 
-  const connected = accounts ?? [];
-  const hasConnections = connected.length > 0;
+  function handleFilesChange(next: UploadedFile[]) {
+    setUploads(next);
+    setPairings((prev) => {
+      const valid = new Set(next.map((f) => String(f.storageId)));
+      const cleaned: Partial<Record<Platform, string>> = {};
+      for (const key of Object.keys(prev) as Platform[]) {
+        const v = prev[key];
+        if (v && valid.has(v)) cleaned[key] = v;
+      }
+      // Auto-pair the newest video everywhere when the first upload lands.
+      if (next.length > 0 && Object.keys(cleaned).length === 0) {
+        const first = String(next[next.length - 1].storageId);
+        for (const p of ALL_PLATFORMS) cleaned[p] = first;
+      }
+      return cleaned;
+    });
+  }
+
+  const videoOptions: VideoOption[] = uploads.map(({ storageId, filename }) => ({
+    storageId,
+    filename,
+  }));
 
   async function handleGenerate() {
     if (masterDescription.length < 20) return;
@@ -87,6 +124,9 @@ function ComposerCanvas() {
       setGenerating(false);
     }
   }
+
+  const connected = accounts ?? [];
+  const hasConnections = connected.length > 0;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -119,7 +159,7 @@ function ComposerCanvas() {
                 to ship.
               </p>
             )}
-            <VideoUploader />
+            <VideoUploader onFilesChange={handleFilesChange} />
             <MasterDescription
               value={masterDescription}
               onChange={setMasterDescription}
@@ -131,7 +171,17 @@ function ComposerCanvas() {
                 {generateError}
               </p>
             )}
-            {rewrites && <RewritesPreview rewrites={rewrites} />}
+            {rewrites && (
+              <RewritesGrid
+                rewrites={rewrites}
+                videos={videoOptions}
+                pairings={pairings}
+                onPairingChange={(platform, id) =>
+                  setPairings((prev) => ({ ...prev, [platform]: id }))
+                }
+                onChange={(patch) => setRewrites((prev) => (prev ? { ...prev, ...patch } : prev))}
+              />
+            )}
             {hasConnections ? (
               <ConnectedState connected={connected} />
             ) : (
@@ -213,51 +263,40 @@ function ConnectedState({
   );
 }
 
-function RewritesPreview({
+function RewritesGrid({
   rewrites,
+  videos,
+  pairings,
+  onPairingChange,
+  onChange,
 }: {
-  rewrites: {
-    youtube: { title: string; description: string; tags: string[] };
-    linkedin: string;
-    x: string;
-    threads: string;
-    instagram: string;
-    tiktok: string;
-  };
+  rewrites: Rewrites;
+  videos: VideoOption[];
+  pairings: Partial<Record<Platform, string>>;
+  onPairingChange: (platform: Platform, storageId: string) => void;
+  onChange: (patch: Partial<Rewrites>) => void;
 }) {
+  const others = ["linkedin", "x", "threads", "instagram", "tiktok"] as const;
+
   return (
-    <div data-testid="rewrites-preview" className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <div className="rounded-lg border border-border bg-surface-raised p-4">
-        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-on-surface-muted">
-          YouTube
-        </p>
-        <p className="mt-2 font-sans text-[14px] font-medium text-on-surface">{rewrites.youtube.title}</p>
-        <p className="mt-2 font-sans text-[13px] leading-[1.5] text-on-surface-muted">
-          {rewrites.youtube.description}
-        </p>
-        {rewrites.youtube.tags.length > 0 && (
-          <p className="mt-2 font-mono text-[11px] text-on-surface-subtle">
-            {rewrites.youtube.tags.join(", ")}
-          </p>
-        )}
-      </div>
-      {(
-        [
-          ["linkedin", rewrites.linkedin],
-          ["x", rewrites.x],
-          ["threads", rewrites.threads],
-          ["instagram", rewrites.instagram],
-          ["tiktok", rewrites.tiktok],
-        ] as const
-      ).map(([platform, text]) => (
-        <div key={platform} className="rounded-lg border border-border bg-surface-raised p-4">
-          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-on-surface-muted">
-            {PLATFORM_LABELS[platform] ?? platform}
-          </p>
-          <p className="mt-2 whitespace-pre-wrap font-sans text-[13px] leading-[1.5] text-on-surface">
-            {text}
-          </p>
-        </div>
+    <div data-testid="rewrites-grid" className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <YouTubeCard
+        value={rewrites.youtube}
+        onChange={(yt) => onChange({ youtube: yt })}
+        videos={videos}
+        selectedVideoId={pairings.youtube}
+        onVideoChange={(id) => onPairingChange("youtube", id)}
+      />
+      {others.map((p) => (
+        <PlatformCard
+          key={p}
+          platform={p}
+          value={rewrites[p]}
+          onChange={(v) => onChange({ [p]: v } as Partial<Rewrites>)}
+          videos={videos}
+          selectedVideoId={pairings[p]}
+          onVideoChange={(id) => onPairingChange(p, id)}
+        />
       ))}
     </div>
   );
