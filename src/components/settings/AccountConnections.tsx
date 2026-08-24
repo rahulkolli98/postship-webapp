@@ -112,17 +112,18 @@ function Panel() {
                     ) : null}
                     <AlertDialog
                       open={pending === a.platform}
-                      onOpenChange={(o) => setPending(o ? a.platform : null)}
+                      onOpenChange={(o: boolean) => setPending(o ? a.platform : null)}
                     >
-                      <AlertDialogTrigger asChild>
-                        <button
-                          type="button"
+                      <AlertDialogTrigger>
+                        <span
+                          role="button"
+                          tabIndex={0}
                           aria-label={`Disconnect ${PLATFORM_LABELS[a.platform] ?? a.platform}`}
                           data-testid={`disconnect-${a.platform}`}
-                          className="ml-1 rounded-sm px-1 text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error"
+                          className="ml-1 inline-flex cursor-pointer rounded-sm px-1 text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error"
                         >
                           ×
-                        </button>
+                        </span>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>

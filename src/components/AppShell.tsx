@@ -96,7 +96,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Logo />
         </div>
 
-        <UserButton afterSignOutUrl="/" />
+        <UserButton />
       </header>
 
       <div className="flex flex-1">
