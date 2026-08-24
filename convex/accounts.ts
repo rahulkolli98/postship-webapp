@@ -1,0 +1,120 @@
+import { query, mutation } from "./_generated/server";
+import { v } from "convex/values";
+import { getCurrentUser } from "./users";
+
+const PLATFORM = v.union(
+  v.literal("youtube"),
+  v.literal("linkedin"),
+  v.literal("x"),
+  v.literal("threads"),
+  v.literal("instagram"),
+  v.literal("tiktok"),
+);
+
+/**
+ * PRD § 4: accounts.list (TASK-024)
+ *
+ * Returns the caller's connected platforms, newest first.
+ *
+ * SECURITY PROJECTION: rows carry OAuth access/refresh tokens that must
+ * never reach a client (PRD § 2 Security Considerations). This query
+ * returns only display-safe fields; token handling stays server-side in
+ * the publishing layer (Phase 2).
+ */
+export const list = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("accounts"),
+      platform: v.union(
+        v.literal("youtube"),
+        v.literal("linkedin"),
+        v.literal("x"),
+        v.literal("threads"),
+        v.literal("instagram"),
+        v.literal("tiktok"),
+      ),
+      platformUsername: v.optional(v.string()),
+      platformDisplayName: v.optional(v.string()),
+      platformAvatarUrl: v.optional(v.string()),
+      connectedAt: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      return [];
+    }
+
+    const rows = await ctx.db
+      .query("accounts")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    return rows
+      .map(({ _id, platform, platformUsername, platformDisplayName, platformAvatarUrl, connectedAt }) => ({
+        _id,
+        platform,
+        platformUsername,
+        platformDisplayName,
+        platformAvatarUrl,
+        connectedAt,
+      }))
+      .sort((a, b) => b.connectedAt - a.connectedAt);
+  },
+});
+
+/**
+ * PRD § 4: accounts.disconnect (TASK-027)
+ *
+ * Removes one connected platform. Auth-guarded: resolves the caller via
+ * getCurrentUser and only deletes rows belonging to them.
+ */
+export const disconnect = mutation({
+  args: { platform: PLATFORM },
+  returns: v.null(),
+  handler: async (ctx, { platform }) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      throw new Error("Not authenticated");
+    }
+
+    const account = await ctx.db
+      .query("accounts")
+      .withIndex("by_userId_platform", (q) =>
+        q.eq("userId", user._id).eq("platform", platform),
+      )
+      .first();
+
+    if (account !== null) {
+      await ctx.db.delete(account._id);
+    }
+    return null;
+  },
+});
+
+/**
+ * v1 brand-level disconnect (roadmap TASK-027 notes): the Post for Me
+ * connection is one brand covering up to six platform rows, so the UI's
+ * "Disconnect all" removes every row for the caller in one go.
+ */
+export const disconnectAll = mutation({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      throw new Error("Not authenticated");
+    }
+
+    const rows = await ctx.db
+      .query("accounts")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+    return rows.length;
+  },
+});
