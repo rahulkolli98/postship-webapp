@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Authenticated, AuthLoading, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { TrialCounter } from "./TrialCounter";
+import { VideoUploader } from "./VideoUploader";
 
 /**
  * Composer — TASK-023 (empty state).
@@ -69,7 +70,10 @@ function ComposerCanvas() {
             <div className="h-4 w-3/4 rounded bg-border/60" />
           </div>
         ) : hasConnections ? (
-          <ConnectedState connected={connected} />
+          <div className="flex flex-col gap-10">
+            <VideoUploader />
+            <ConnectedState connected={connected} />
+          </div>
         ) : (
           <EmptyState />
         )}
