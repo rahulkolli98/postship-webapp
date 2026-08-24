@@ -82,7 +82,8 @@ export function PlatformCard({
         />
         {videos.length > 0 && onVideoChange && (
           <Select
-            value={selectedVideoId ?? ""}
+            items={videos.map((v) => ({ value: v.storageId, label: v.filename }))}
+            value={selectedVideoId ?? null}
             onValueChange={(v) => {
               if (v) onVideoChange(v);
             }}
@@ -177,7 +178,8 @@ export function YouTubeCard({
         />
         {videos.length > 0 && onVideoChange && (
           <Select
-            value={selectedVideoId ?? ""}
+            items={videos.map((v) => ({ value: v.storageId, label: v.filename }))}
+            value={selectedVideoId ?? null}
             onValueChange={(v) => {
               if (v) onVideoChange(v);
             }}

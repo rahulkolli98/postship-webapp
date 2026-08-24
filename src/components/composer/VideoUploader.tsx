@@ -149,6 +149,30 @@ export function VideoUploader({
 
   return (
     <div data-testid="video-uploader" className="flex flex-col gap-4">
+      {/* Upload queue — files + detected aspect ratios (founder request) */}
+      {files.length > 0 && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
+            Queue
+          </p>
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {files.map((f) => (
+              <span
+                key={f.storageId}
+                data-testid="queue-item"
+                className="inline-flex max-w-[260px] items-center gap-2 rounded-md border border-border bg-surface-raised px-2 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface"
+              >
+                <span className="truncate">{f.filename}</span>
+                <span className="shrink-0 text-accent">
+                  {f.aspectRatio ?? "reading"}
+                  {f.durationSeconds ? ` · ${f.durationSeconds}s` : ""}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Dropzone */}
       <div
         onDragOver={(e) => {
@@ -212,6 +236,11 @@ export function VideoUploader({
                 <span className="truncate font-mono text-[11px] text-on-surface-muted">
                   {f.filename}
                 </span>
+                {f.aspectRatio && (
+                  <span className="shrink-0 rounded-sm bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-on-surface">
+                    {f.aspectRatio}
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => removeAt(i)}
