@@ -105,8 +105,20 @@ function ComposerCanvas() {
             <div className="h-10 w-1/2 rounded bg-border/60" />
             <div className="h-4 w-3/4 rounded bg-border/60" />
           </div>
-        ) : hasConnections ? (
+        ) : (
           <div className="flex flex-col gap-10">
+            {!hasConnections && (
+              <p
+                role="status"
+                className="rounded-md border border-warning/60 bg-warning/10 px-4 py-3 font-sans text-[13px] leading-[1.5] text-warning"
+              >
+                Not connected yet — you can still upload and generate.{" "}
+                <Link href="/settings/accounts" className="underline">
+                  Connect platforms
+                </Link>{" "}
+                to ship.
+              </p>
+            )}
             <VideoUploader />
             <MasterDescription
               value={masterDescription}
@@ -120,12 +132,33 @@ function ComposerCanvas() {
               </p>
             )}
             {rewrites && <RewritesPreview rewrites={rewrites} />}
-            <ConnectedState connected={connected} />
+            {hasConnections ? (
+              <ConnectedState connected={connected} />
+            ) : (
+              <ConnectPrompt />
+            )}
           </div>
-        ) : (
-          <EmptyState />
         )}
       </section>
+    </div>
+  );
+}
+
+function ConnectPrompt() {
+  return (
+    <div data-testid="composer-empty-state" className="rounded-lg border border-dashed border-border bg-surface-raised p-6">
+      <p className="font-sans text-[14px] font-medium text-on-surface">
+        Ready to ship? Connect your first platform.
+      </p>
+      <p className="mt-2 max-w-[560px] font-sans text-[13px] leading-[1.5] text-on-surface-muted">
+        Postship publishes through Post for Me — one connection lights up all six networks.
+      </p>
+      <Link
+        href="/settings/accounts"
+        className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-primary px-5 font-sans text-sm font-medium text-primary-foreground transition-colors hover:bg-accent hover:text-on-accent"
+      >
+        Connect platforms
+      </Link>
     </div>
   );
 }
