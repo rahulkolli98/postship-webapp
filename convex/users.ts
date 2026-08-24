@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { QueryCtx, MutationCtx } from "./_generated/server";
 
@@ -44,6 +44,43 @@ export const current = query({
       )
       .unique();
   },
+});
+
+/**
+ * Internal helper for actions (like rewrites.generate) that cannot access
+ * ctx.db directly. Resolves the caller's Clerk identity to the Convex user
+ * row; used via ctx.runQuery(internal.users.getByClerkId).
+ */
+export const getByClerkId = internalQuery({
+  args: { clerkUserId: v.string() },
+  returns: v.union(
+    v.object({
+      _id: v.id("users"),
+      _creationTime: v.number(),
+      clerkUserId: v.string(),
+      email: v.string(),
+      displayName: v.optional(v.string()),
+      avatarUrl: v.optional(v.string()),
+      createdAt: v.number(),
+      subscriptionStatus: v.union(
+        v.literal("trial"),
+        v.literal("active"),
+        v.literal("expired"),
+        v.literal("canceled"),
+      ),
+      subscriptionTier: v.optional(v.union(v.literal("creator"), v.literal("pro"))),
+      subscriptionPeriodEnd: v.optional(v.number()),
+      revenuecatCustomerId: v.optional(v.string()),
+      trialStartedAt: v.optional(v.number()),
+      trialPostsUsed: v.optional(v.number()),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, { clerkUserId }) =>
+    ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique(),
 });
 
 /**

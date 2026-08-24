@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Authenticated, AuthLoading, useQuery } from "convex/react";
+import { useState } from "react";
+import { Authenticated, AuthLoading, useAction, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { TrialCounter } from "./TrialCounter";
 import { VideoUploader } from "./VideoUploader";
+import { MasterDescription } from "./MasterDescription";
 
 /**
  * Composer — TASK-023 (empty state).
@@ -49,8 +51,42 @@ function Skeleton() {
 
 function ComposerCanvas() {
   const accounts = useQuery(api.accounts.list);
+  const generate = useAction(api.rewrites.generate);
+  const [masterDescription, setMasterDescription] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  // Ephemeral until posts.create (TASK-049) persists drafts. A future `drafts`
+  // table (noted in docs/project-context.md) will make this survive refresh.
+  const [rewrites, setRewrites] = useState<null | {
+    youtube: { title: string; description: string; tags: string[] };
+    linkedin: string;
+    x: string;
+    threads: string;
+    instagram: string;
+    tiktok: string;
+  }>(null);
+
   const connected = accounts ?? [];
   const hasConnections = connected.length > 0;
+
+  async function handleGenerate() {
+    if (masterDescription.length < 20) return;
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const result = await generate({ masterDescription });
+      setRewrites(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/AI not configured/i.test(msg)) {
+        setGenerateError("AI not configured. Add OPENROUTER_API_KEY in webapp/.env.local and via `npx convex env set OPENROUTER_API_KEY ...`.");
+      } else {
+        setGenerateError("Couldn't generate. Try again.");
+      }
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -72,6 +108,18 @@ function ComposerCanvas() {
         ) : hasConnections ? (
           <div className="flex flex-col gap-10">
             <VideoUploader />
+            <MasterDescription
+              value={masterDescription}
+              onChange={setMasterDescription}
+              onGenerate={handleGenerate}
+              generating={generating}
+            />
+            {generateError && (
+              <p role="alert" className="font-sans text-[13px] text-error">
+                {generateError}
+              </p>
+            )}
+            {rewrites && <RewritesPreview rewrites={rewrites} />}
             <ConnectedState connected={connected} />
           </div>
         ) : (
@@ -112,14 +160,10 @@ function ConnectedState({
 }) {
   return (
     <div data-testid="composer-connected">
-      <h1 className="font-newsreader text-4xl font-medium leading-[1.05] tracking-[-0.025em] text-on-surface md:text-[56px]">
-        Drop your videos. Write it once.
-      </h1>
-      <p className="mt-4 max-w-[560px] font-sans text-[15px] leading-[1.55] text-on-surface-muted">
-        The upload and caption flow ships in Phase 2. Your connected platforms
-        are ready for it.
+      <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
+        Connected platforms
       </p>
-      <ul className="mt-8 flex flex-wrap gap-2" aria-label="Connected platforms">
+      <ul className="mt-4 flex flex-wrap gap-2" aria-label="Connected platforms">
         {connected.map((a) => (
           <li
             key={a._id}
@@ -132,6 +176,56 @@ function ConnectedState({
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function RewritesPreview({
+  rewrites,
+}: {
+  rewrites: {
+    youtube: { title: string; description: string; tags: string[] };
+    linkedin: string;
+    x: string;
+    threads: string;
+    instagram: string;
+    tiktok: string;
+  };
+}) {
+  return (
+    <div data-testid="rewrites-preview" className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="rounded-lg border border-border bg-surface-raised p-4">
+        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-on-surface-muted">
+          YouTube
+        </p>
+        <p className="mt-2 font-sans text-[14px] font-medium text-on-surface">{rewrites.youtube.title}</p>
+        <p className="mt-2 font-sans text-[13px] leading-[1.5] text-on-surface-muted">
+          {rewrites.youtube.description}
+        </p>
+        {rewrites.youtube.tags.length > 0 && (
+          <p className="mt-2 font-mono text-[11px] text-on-surface-subtle">
+            {rewrites.youtube.tags.join(", ")}
+          </p>
+        )}
+      </div>
+      {(
+        [
+          ["linkedin", rewrites.linkedin],
+          ["x", rewrites.x],
+          ["threads", rewrites.threads],
+          ["instagram", rewrites.instagram],
+          ["tiktok", rewrites.tiktok],
+        ] as const
+      ).map(([platform, text]) => (
+        <div key={platform} className="rounded-lg border border-border bg-surface-raised p-4">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-on-surface-muted">
+            {PLATFORM_LABELS[platform] ?? platform}
+          </p>
+          <p className="mt-2 whitespace-pre-wrap font-sans text-[13px] leading-[1.5] text-on-surface">
+            {text}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
