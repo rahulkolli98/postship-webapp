@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { detectVideoMeta } from "../../lib/aspectRatio";
 
 /**
  * VideoUploader — TASK-037 (PRD FR-003).
@@ -26,6 +27,8 @@ export type UploadedFile = {
   storageId: Id<"_storage">;
   filename: string;
   blobUrl: string; // local preview
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  durationSeconds?: number;
 };
 
 function validateFiles(
@@ -104,7 +107,13 @@ export function VideoUploader({
           }
           const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
           const blobUrl = URL.createObjectURL(file);
-          setFiles((prev) => [...prev, { storageId, filename: file.name, blobUrl }]);
+          // Probe metadata (TASK-046) so pairing defaults + posts.videos
+          // have aspectRatio/duration without a second pass.
+          const meta = await detectVideoMeta(blobUrl);
+          setFiles((prev) => [
+            ...prev,
+            { storageId, filename: file.name, blobUrl, ...meta },
+          ]);
         }
       } catch {
         setError("Upload failed. Try again.");

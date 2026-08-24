@@ -8,6 +8,7 @@ import { TrialCounter } from "./TrialCounter";
 import { VideoUploader, type UploadedFile } from "./VideoUploader";
 import { MasterDescription } from "./MasterDescription";
 import { PlatformCard, YouTubeCard, type Platform, type VideoOption } from "./PlatformCard";
+import { computeDefaultPairings, type Orientation } from "../../lib/aspectRatio";
 
 /**
  * Composer — TASK-023 (empty state) → TASK-045 (full wiring).
@@ -35,6 +36,20 @@ const ALL_PLATFORMS = [
   "instagram",
   "tiktok",
 ] as const satisfies readonly Platform[];
+
+/**
+ * TASK-046 pairing preferences. Founder call (2026-08-23): Threads prefers
+ * PORTRAIT when both orientations exist; everything else follows PRD
+ * FR-007 defaults (YouTube/LinkedIn/X landscape-first, IG/TikTok portrait).
+ */
+const PAIRING_PREFS: Record<Platform, Orientation> = {
+  youtube: "landscape",
+  linkedin: "landscape",
+  x: "landscape",
+  threads: "portrait",
+  instagram: "portrait",
+  tiktok: "portrait",
+};
 
 const PLATFORM_LABELS: Record<string, string> = {
   youtube: "YouTube",
@@ -82,29 +97,45 @@ function ComposerCanvas() {
   const [uploads, setUploads] = useState<UploadedFile[]>([]);
   // Per-platform selected video storageId.
   const [pairings, setPairings] = useState<Partial<Record<Platform, string>>>({});
+  // Platforms the user manually changed (TASK-046): auto-defaults never
+  // overwrite these until their video is removed.
+  const [overrides, setOverrides] = useState<Set<Platform>>(new Set());
 
   function handleFilesChange(next: UploadedFile[]) {
+    const validIds = new Set(next.map((f) => String(f.storageId)));
+
+    // Keep pairings whose video still exists; forget overrides for removed ones.
+    const keptPairings: Partial<Record<Platform, string>> = {};
+    const keptOverrides = new Set<Platform>();
+    for (const p of ALL_PLATFORMS) {
+      const v = pairings[p];
+      if (v && validIds.has(v)) {
+        keptPairings[p] = v;
+        if (overrides.has(p)) keptOverrides.add(p);
+      }
+    }
+
+    // TASK-046 defaults — applied only where the user hasn't overridden.
+    const defaults =
+      next.length > 0 ? computeDefaultPairings(next, PAIRING_PREFS) : {};
+    for (const p of ALL_PLATFORMS) {
+      if (!keptOverrides.has(p)) {
+        const d = defaults[p];
+        if (d) keptPairings[p] = d;
+      }
+    }
+
     setUploads(next);
-    setPairings((prev) => {
-      const valid = new Set(next.map((f) => String(f.storageId)));
-      const cleaned: Partial<Record<Platform, string>> = {};
-      for (const key of Object.keys(prev) as Platform[]) {
-        const v = prev[key];
-        if (v && valid.has(v)) cleaned[key] = v;
-      }
-      // Auto-pair the newest video everywhere when the first upload lands.
-      if (next.length > 0 && Object.keys(cleaned).length === 0) {
-        const first = String(next[next.length - 1].storageId);
-        for (const p of ALL_PLATFORMS) cleaned[p] = first;
-      }
-      return cleaned;
-    });
+    setPairings(keptPairings);
+    setOverrides(keptOverrides);
   }
 
-  const videoOptions: VideoOption[] = uploads.map(({ storageId, filename }) => ({
-    storageId,
-    filename,
-  }));
+  const videoOptions: VideoOption[] = uploads.map(
+    ({ storageId, filename }) => ({
+      storageId,
+      filename,
+    }),
+  );
 
   async function handleGenerate() {
     if (masterDescription.length < 20) return;
@@ -176,9 +207,10 @@ function ComposerCanvas() {
                 rewrites={rewrites}
                 videos={videoOptions}
                 pairings={pairings}
-                onPairingChange={(platform, id) =>
-                  setPairings((prev) => ({ ...prev, [platform]: id }))
-                }
+                onPairingChange={(platform, id) => {
+                  setPairings((prev) => ({ ...prev, [platform]: id }));
+                  setOverrides((prev) => new Set(prev).add(platform));
+                }}
                 onChange={(patch) => setRewrites((prev) => (prev ? { ...prev, ...patch } : prev))}
               />
             )}
