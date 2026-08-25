@@ -1,9 +1,14 @@
-import { mutation } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { ConvexError } from "convex/values";
+import { env } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { assertUserCanPost } from "./_guards";
 import { PLATFORM } from "./accounts";
+import { publish } from "../src/lib/publishing";
+import { createPostForMeClient } from "../src/lib/publishing/postforme";
+import type { PublishResult } from "../src/lib/publishing/types";
 
 /**
  * posts.create — TASK-049 (PRD § 4).
@@ -21,6 +26,28 @@ import { PLATFORM } from "./accounts";
  */
 
 const PLATFORM_KEYS = ["youtube", "linkedin", "x", "threads", "instagram", "tiktok"] as const;
+
+/** Per-platform ship outcome — shared by ship results + webhook updates (TASK-056). */
+const resultEntry = v.object({
+  status: v.union(
+    v.literal("queued"),
+    v.literal("uploading"),
+    v.literal("posted"),
+    v.literal("failed"),
+  ),
+  url: v.optional(v.string()),
+  error: v.optional(v.string()),
+  postedAt: v.optional(v.number()),
+});
+
+const shipResultsValidator = v.object({
+  youtube: v.optional(resultEntry),
+  linkedin: v.optional(resultEntry),
+  x: v.optional(resultEntry),
+  threads: v.optional(resultEntry),
+  instagram: v.optional(resultEntry),
+  tiktok: v.optional(resultEntry),
+});
 
 const videoValidator = v.object({
   storageId: v.id("_storage"),
@@ -108,5 +135,163 @@ export const create = mutation({
       },
       createdAt: now,
     });
+  },
+});
+
+// ── Ship path (TASK-052) ──────────────────────────────────────────────
+//
+// NOTE: this file must NOT carry "use node" — `create` above is a mutation,
+// and the node directive applies to the whole module. The ship action uses
+// only global fetch (via the publishing abstraction), so the default Convex
+// runtime is fine.
+
+/** Ownership-filtered post loader for actions (no ctx.db in action ctx). */
+export const getOwned = internalQuery({
+  args: { postId: v.id("posts"), userId: v.id("users") },
+  handler: async (ctx, { postId, userId }) => {
+    const post = await ctx.db.get(postId);
+    if (post === null || post.userId !== userId) return null;
+    return post;
+  },
+});
+
+/** Merge per-platform ship results into the stored platformResults. */
+export const applyShipUpdate = internalMutation({
+  args: {
+    postId: v.id("posts"),
+    results: shipResultsValidator,
+    markPublished: v.boolean(),
+  },
+  handler: async (ctx, { postId, results, markPublished }) => {
+    const post = await ctx.db.get(postId);
+    if (post === null) return null;
+
+    const merged = { ...post.platformResults };
+    for (const key of PLATFORM_KEYS) {
+      const incoming = results[key];
+      if (incoming) merged[key] = incoming;
+    }
+
+    await ctx.db.patch(postId, {
+      platformResults: merged,
+      ...(markPublished ? { publishedAt: Date.now() } : {}),
+    });
+    return null;
+  },
+});
+
+/**
+ * PRD FR-008 — posts.ship. Publishes the paired media + captions for every
+ * CONNECTED platform through the publishing abstraction (Post for Me v1).
+ *
+ * Sequence: auth → gate (assertUserCanPost) → ownership → connected targets
+ * → signed media URLs → publish() → applyShipUpdate → incrementTrialPosts.
+ *
+ * Attempt-based metering: the trial counter increments even if individual
+ * platforms fail (founder-approved, TASK-052 plan). Final posted/failed
+ * states arrive via PFM webhooks (TASK-056); results here start at
+ * "uploading"/"failed".
+ */
+export const ship = action({
+  args: { postId: v.id("posts") },
+  returns: v.object({
+    postId: v.id("posts"),
+    results: shipResultsValidator,
+  }),
+  handler: async (
+    ctx,
+    { postId },
+  ): Promise<{ postId: Id<"posts">; results: PublishResult }> => {
+    // ── Auth ───────────────────────────────────────────────────────────
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) throw new Error("Not authenticated");
+    const user = await ctx.runQuery(internal.users.getByClerkId, {
+      clerkUserId: identity.subject,
+    });
+    if (user === null) throw new Error("Not authenticated");
+
+    // ── Gate (trial window/quota; tiers expand in TASK-067) ────────────
+    assertUserCanPost(user);
+
+    // ── Post + ownership ───────────────────────────────────────────────
+    const post = await ctx.runQuery(internal.posts.getOwned, {
+      postId,
+      userId: user._id,
+    });
+    if (post === null) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Post not found." });
+    }
+
+    // ── Connected targets (raw rows incl. provider account ids) ────────
+    const accountRows = await ctx.runQuery(internal.accounts.listInternal, {
+      userId: user._id,
+    });
+    const targets = accountRows
+      .filter((a) => a.platformUserId)
+      .map((a) => ({
+        platform: a.platform,
+        socialAccountId: a.platformUserId,
+      }));
+    if (targets.length === 0) {
+      throw new ConvexError({
+        code: "NO_CONNECTIONS",
+        message:
+          "No platforms connected yet. Connect via Post for Me to start shipping.",
+      });
+    }
+
+    // ── Signed media URLs (PFM fetches from these) ─────────────────────
+    const urlById = new Map<string, string>();
+    for (const video of post.videos) {
+      const url = await ctx.storage.getUrl(video.storageId);
+      if (!url) {
+        throw new ConvexError({
+          code: "MEDIA_MISSING",
+          message: `Stored video "${video.filename}" is no longer retrievable. Re-upload and try again.`,
+        });
+      }
+      urlById.set(String(video.storageId), url);
+    }
+    const media = post.videos.map((v) => ({
+      url: urlById.get(String(v.storageId)) as string,
+      filename: v.filename,
+      aspectRatio: v.aspectRatio,
+    }));
+    const pairing = Object.fromEntries(
+      PLATFORM_KEYS.map((p) => {
+        const storageId = post.pairings[p];
+        return [p, urlById.get(storageId) ?? ""];
+      }),
+    ) as Record<(typeof PLATFORM_KEYS)[number], string>;
+
+    // ── Publish via abstraction ────────────────────────────────────────
+    const apiKey = env.POSTFORME_API_KEY ?? null;
+    if (!apiKey) {
+      throw new ConvexError({
+        code: "PUBLISHING_NOT_CONFIGURED",
+        message:
+          "Publishing backend not configured. Set POSTFORME_API_KEY via `npx convex env set` (see docs/HANDOFF.md).",
+      });
+    }
+    const client = createPostForMeClient(apiKey);
+    const results = await publish(client, {
+      masterDescription: post.masterDescription,
+      captions: post.rewrites,
+      media,
+      pairing,
+      targets,
+    });
+
+    // ── Persist results + meter the attempt ────────────────────────────
+    await ctx.runMutation(internal.posts.applyShipUpdate, {
+      postId,
+      results: results as typeof shipResultsValidator.type,
+      markPublished: true,
+    });
+    await ctx.runMutation(internal.users.incrementTrialPosts, {
+      userId: user._id,
+    });
+
+    return { postId, results };
   },
 });

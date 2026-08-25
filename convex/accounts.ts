@@ -1,4 +1,8 @@
-import { query, mutation } from "./_generated/server";
+import {
+  internalQuery,
+  query,
+  mutation,
+} from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentUser } from "./users";
 
@@ -99,6 +103,20 @@ export const disconnect = mutation({
  * connection is one brand covering up to six platform rows, so the UI's
  * "Disconnect all" removes every row for the caller in one go.
  */
+/**
+ * Internal raw-rows query for server-side flows (TASK-052 ship). Unlike
+ * the public `list`, this INCLUDES tokens + provider account ids — it must
+ * never be registered as a public function.
+ */
+export const listInternal = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) =>
+    ctx.db
+      .query("accounts")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect(),
+});
+
 export const disconnectAll = mutation({
   args: {},
   returns: v.number(),

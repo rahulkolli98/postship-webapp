@@ -1,4 +1,9 @@
-import { internalQuery, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
 import { v } from "convex/values";
 import { QueryCtx, MutationCtx } from "./_generated/server";
 
@@ -133,5 +138,25 @@ export const upsertFromClerk = mutation({
       trialStartedAt: now,
       trialPostsUsed: 0,
     });
+  },
+});
+
+/**
+ * PRD FR-008: increment the trial ship counter. Called by posts.ship AFTER
+ * a successful publish attempt (attempt-based metering). No-op for paid
+ * tiers — only trial users carry the 5-post lifetime quota.
+ */
+export const incrementTrialPosts = internalMutation({
+  args: { userId: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (user === null || user.subscriptionStatus !== "trial") {
+      return null;
+    }
+    await ctx.db.patch(userId, {
+      trialPostsUsed: (user.trialPostsUsed ?? 0) + 1,
+    });
+    return null;
   },
 });

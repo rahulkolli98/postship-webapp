@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as _guards from "../_guards.js";
 import type * as accounts from "../accounts.js";
 import type * as posts from "../posts.js";
 import type * as rewrites from "../rewrites.js";
@@ -21,6 +22,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  _guards: typeof _guards;
   accounts: typeof accounts;
   posts: typeof posts;
   rewrites: typeof rewrites;

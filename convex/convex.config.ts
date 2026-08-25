@@ -20,5 +20,8 @@ export default defineApp({
     DEEPSEEK_API_KEY: v.optional(v.string()),
     OPENAI_API_KEY: v.optional(v.string()),
     CLERK_JWT_ISSUER_DOMAIN: v.optional(v.string()),
+    // Post for Me publishing backend (TASK-051/052). Founder creates the
+    // account at app.postforme.dev → API key.
+    POSTFORME_API_KEY: v.optional(v.string()),
   },
 });
