@@ -117,6 +117,8 @@ export default defineSchema({
       tiktok: v.string(),
     }),
     publishedAt: v.optional(v.number()),
+    /** Intended ship targets (founder-selected in composer). Optional for rows created before TASK-045b. */
+    platforms: v.optional(v.array(v.string())),
     platformResults: v.object({
       youtube: v.optional(v.object(platformResult)),
       linkedin: v.optional(v.object(platformResult)),

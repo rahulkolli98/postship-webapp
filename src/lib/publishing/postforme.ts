@@ -3,24 +3,30 @@ import type {
   PublishResult,
   PublishingClient,
 } from "./types";
-import { captionFor } from "./index";
 
 /**
- * Post for Me client — TASK-051 (v1 publishing backend).
+ * Post for Me client — TASK-051 + 051b (v1 publishing backend).
  *
- * Verified contract (postforme.dev homepage, 2026-08-24):
- *   POST {base}/social-posts
- *   Authorization: Bearer <api-key>
- *   { caption: string, social_accounts: ["sa_…"], media: [{ url }] }
- *   → { id }   (posting is async; final status arrives via webhooks)
+ * Contract VERIFIED against vendor source (NestJS DTOs, repo
+ * DayMoonDevelopment/post-for-me, api/src/social-posts/dto/*):
+ *   POST {base}/social-posts        Authorization: Bearer <key>
+ *   {
+ *     caption,                      // base caption (required)
+ *     social_accounts: ["sa_…"],    // required
+ *     media: [{ url }],             // shared media set
+ *     platform_configurations: { youtube: { title, description, tags } },
+ *     account_configurations: [     // per-account overrides
+ *       { social_account_id, configuration: { caption?, media? } }
+ *     ],
+ *     external_id,                  // idempotency — we send posts._id
+ *     scheduled_at: null            // null → post instantly
+ *   }
+ *   → SocialPostDto { id, status: draft|scheduled|processing|processed, … }
  *
- * One call PER target — PFM takes a single caption per request, and our
- * whole product is per-platform captions. Results start at "uploading";
- * the webhook handler (TASK-056) moves them to posted/failed.
- *
- * TODO(before live shipping): confirm against api.postforme.dev/docs —
- * (a) YouTube title/tags as dedicated fields vs folded into caption,
- * (b) error response shape, (c) status-polling endpoint if webhooks lag.
+ * ONE call covers all targets: each account gets its own caption/media via
+ * account_configurations; YouTube gets native structured fields via
+ * platform_configurations. Posting is ASYNC — results start at "uploading"
+ * and finalize via webhooks/status polling (TASK-056).
  */
 
 const DEFAULT_BASE_URL = "https://api.postforme.dev";
@@ -31,60 +37,96 @@ export function createPostForMeClient(
 ): PublishingClient {
   return {
     async publish(req: PublishRequest): Promise<PublishResult> {
-      const results: PublishResult = await Promise.all(
-        req.targets.map(async (target) => {
-          const pairedMedia = req.media.filter(
-            (m) => m.url === req.pairing[target.platform],
-          );
-          try {
-            const res = await fetch(`${baseUrl}/social-posts`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                caption: captionFor(target.platform, req.captions),
-                social_accounts: [target.socialAccountId],
-                media: pairedMedia.map((m) => ({ url: m.url })),
-              }),
-            });
+      const body: Record<string, unknown> = {
+        caption:
+          req.masterDescription ||
+          req.targets.find((t) => t.caption)?.caption ||
+          "",
+        social_accounts: req.targets.map((t) => t.socialAccountId),
+        media: dedupeByUrl(req.media).map((m) => ({ url: m.url })),
+        external_id: req.externalId ?? null,
+        scheduled_at: null,
+      };
 
-            if (!res.ok) {
-              // Deliberately generic — provider body may contain anything.
-              return [
-                target.platform,
-                {
-                  status: "failed" as const,
-                  error: `Post for Me error ${res.status}`,
-                },
-              ] as const;
-            }
+      if (req.youtube && req.targets.some((t) => t.platform === "youtube")) {
+        body.platform_configurations = {
+          youtube: {
+            title: req.youtube.title,
+            description: req.youtube.description,
+            tags: req.youtube.tags,
+          },
+        };
+      }
 
-            const data = (await res.json().catch(() => ({}))) as {
-              id?: string;
-              url?: string;
-            };
-            return [
-              target.platform,
-              {
-                status: "uploading" as const,
-                ...(data?.url ? { url: data.url } : {}),
-              },
-            ] as const;
-          } catch (err) {
-            return [
-              target.platform,
-              {
-                status: "failed" as const,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            ] as const;
-          }
-        }),
-      ).then((entries) => Object.fromEntries(entries) as PublishResult);
+      const accountConfigurations = req.targets
+        .filter((t) => t.caption.trim().length > 0 || t.media.length > 0)
+        .map((t) => ({
+          social_account_id: t.socialAccountId,
+          configuration: {
+            ...(t.caption.trim() ? { caption: t.caption } : {}),
+            ...(t.media.length > 0
+              ? { media: t.media.map((m) => ({ url: m.url })) }
+              : {}),
+          },
+        }));
+      if (accountConfigurations.length > 0) {
+        body.account_configurations = accountConfigurations;
+      }
 
-      return results;
+      try {
+        const res = await fetch(`${baseUrl}/social-posts`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          return failAll(req, `Post for Me error ${res.status}`);
+        }
+
+        const data = (await res.json().catch(() => ({}))) as {
+          id?: string;
+          url?: string;
+          status?: string;
+        };
+
+        // PFM processes asynchronously: map its processing/scheduled states
+        // to our "uploading"; final posted/failed arrives via TASK-056.
+        const uploading =
+          data.status === undefined ||
+          data.status === "processing" ||
+          data.status === "scheduled";
+
+        return Object.fromEntries(
+          req.targets.map((t) => [
+            t.platform,
+            uploading
+              ? { status: "uploading" as const }
+              : { status: "failed" as const, error: `Unexpected PFM status: ${data.status}` },
+          ]),
+        ) as PublishResult;
+      } catch (err) {
+        return failAll(
+          req,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     },
   };
+}
+
+function failAll(req: PublishRequest, error: string): PublishResult {
+  return Object.fromEntries(
+    req.targets.map((t) => [t.platform, { status: "failed" as const, error }]),
+  ) as PublishResult;
+}
+
+function dedupeByUrl<T extends { url: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((i) =>
+    seen.has(i.url) ? false : (seen.add(i.url), true),
+  );
 }

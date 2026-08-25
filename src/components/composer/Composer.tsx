@@ -37,6 +37,15 @@ const ALL_PLATFORMS = [
   "tiktok",
 ] as const satisfies readonly Platform[];
 
+const EMPTY_REWRITES: Rewrites = {
+  youtube: { title: "", description: "", tags: [] },
+  linkedin: "",
+  x: "",
+  threads: "",
+  instagram: "",
+  tiktok: "",
+};
+
 /**
  * TASK-048: overwrite only the requested platforms' slices. The action
  * returns "" for non-requested platforms — a naive spread would wipe cards.
@@ -120,6 +129,23 @@ function ComposerCanvas() {
   const [overrides, setOverrides] = useState<Set<Platform>>(new Set());
   // TASK-048: platforms with a regenerate call in flight (per-card spinner).
   const [regenerating, setRegenerating] = useState<Set<Platform>>(new Set());
+  // TASK-045b: founder-selected ship targets. Default = all six on.
+  const [selected, setSelected] = useState<Set<Platform>>(
+    new Set(ALL_PLATFORMS),
+  );
+
+  function togglePlatform(platform: Platform) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(platform)) {
+        if (next.size === 1) return prev; // never allow zero selection
+        next.delete(platform);
+      } else {
+        next.add(platform);
+      }
+      return next;
+    });
+  }
 
   function handleFilesChange(next: UploadedFile[]) {
     const validIds = new Set(next.map((f) => String(f.storageId)));
@@ -158,17 +184,19 @@ function ComposerCanvas() {
   );
 
   async function handleGenerate() {
-    if (masterDescription.length < 20) return;
+    if (masterDescription.length < 20 || selected.size === 0) return;
+    const platforms = [...selected];
     setGenerating(true);
     setGenerateError(null);
     try {
       const result = await generate({
         masterDescription,
-        platforms: [...ALL_PLATFORMS],
+        platforms,
         mode: "generate",
       });
-      // First generation replaces wholesale; later ones merge (TASK-048).
-      setRewrites((prev) => (prev ? mergeRewrites(prev, result, [...ALL_PLATFORMS]) : result));
+      // TASK-045b: overwrites all SELECTED cards (hinted on the button);
+      // deselected cards keep whatever they had.
+      setRewrites((prev) => (prev ? mergeRewrites(prev, result, platforms) : result));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/AI not configured/i.test(msg)) {
@@ -243,32 +271,65 @@ function ComposerCanvas() {
                 to ship.
               </p>
             )}
+
+            {/* TASK-045b: platform selection chips */}
+            <div className="flex flex-col gap-2">
+              <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
+                Post to
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {ALL_PLATFORMS.map((p) => {
+                  const active = selected.has(p);
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={active}
+                      data-testid={`select-${p}`}
+                      onClick={() => togglePlatform(p)}
+                      className={`rounded-md border px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.08em] transition-colors ${
+                        active
+                          ? "border-accent bg-accent-soft/60 text-on-surface"
+                          : "border-border bg-surface-raised text-on-surface-muted hover:border-border-strong hover:text-on-surface"
+                      }`}
+                    >
+                      {PLATFORM_LABELS[p]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <VideoUploader onFilesChange={handleFilesChange} />
             <MasterDescription
               value={masterDescription}
               onChange={setMasterDescription}
               onGenerate={handleGenerate}
               generating={generating}
+              generateHint="Rewrites all selected captions"
             />
             {generateError && (
               <p role="alert" className="font-sans text-[13px] text-error">
                 {generateError}
               </p>
             )}
-            {rewrites && (
-              <RewritesGrid
-                rewrites={rewrites}
-                videos={videoOptions}
-                pairings={pairings}
-                onPairingChange={(platform, id) => {
-                  setPairings((prev) => ({ ...prev, [platform]: id }));
-                  setOverrides((prev) => new Set(prev).add(platform));
-                }}
-                onChange={(patch) => setRewrites((prev) => (prev ? { ...prev, ...patch } : prev))}
-                onRegenerate={handleRegenerate}
-                regenerating={regenerating}
-              />
-            )}
+            {/* TASK-045b: cards render for SELECTED platforms even before
+                Generate — manual writers get their fields immediately. */}
+            <RewritesGrid
+              values={rewrites}
+              platforms={[...selected]}
+              videos={videoOptions}
+              pairings={pairings}
+              onPairingChange={(platform, id) => {
+                setPairings((prev) => ({ ...prev, [platform]: id }));
+                setOverrides((prev) => new Set(prev).add(platform));
+              }}
+              onChange={(patch) =>
+                setRewrites((prev) => ({ ...(prev ?? EMPTY_REWRITES), ...patch }))
+              }
+              onRegenerate={handleRegenerate}
+              regenerating={regenerating}
+            />
             {hasConnections ? (
               <ConnectedState connected={connected} />
             ) : (
@@ -351,7 +412,8 @@ function ConnectedState({
 }
 
 function RewritesGrid({
-  rewrites,
+  values,
+  platforms,
   videos,
   pairings,
   onPairingChange,
@@ -359,7 +421,9 @@ function RewritesGrid({
   onRegenerate,
   regenerating,
 }: {
-  rewrites: Rewrites;
+  /** Current caption values — may be EMPTY_REWRITES before first generate. */
+  values: Rewrites | null;
+  platforms: Platform[];
   videos: VideoOption[];
   pairings: Partial<Record<Platform, string>>;
   onPairingChange: (platform: Platform, storageId: string) => void;
@@ -367,32 +431,39 @@ function RewritesGrid({
   onRegenerate: (platform: Platform) => void;
   regenerating: Set<Platform>;
 }) {
-  const others = ["linkedin", "x", "threads", "instagram", "tiktok"] as const;
+  // YouTube first, then the rest in canonical order, filtered to selection.
+  const ordered = (["youtube", "linkedin", "x", "threads", "instagram", "tiktok"] as const).filter(
+    (p) => platforms.includes(p),
+  );
 
   return (
     <div data-testid="rewrites-grid" className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <YouTubeCard
-        value={rewrites.youtube}
-        onChange={(yt) => onChange({ youtube: yt })}
-        videos={videos}
-        selectedVideoId={pairings.youtube}
-        onVideoChange={(id) => onPairingChange("youtube", id)}
-        onRegenerate={() => onRegenerate("youtube")}
-        regenerating={regenerating.has("youtube")}
-      />
-      {others.map((p) => (
-        <PlatformCard
-          key={p}
-          platform={p}
-          value={rewrites[p]}
-          onChange={(v) => onChange({ [p]: v } as Partial<Rewrites>)}
-          videos={videos}
-          selectedVideoId={pairings[p]}
-          onVideoChange={(id) => onPairingChange(p, id)}
-          onRegenerate={() => onRegenerate(p)}
-          regenerating={regenerating.has(p)}
-        />
-      ))}
+      {ordered.map((p) =>
+        p === "youtube" ? (
+          <YouTubeCard
+            key="youtube"
+            value={values?.youtube ?? { title: "", description: "", tags: [] }}
+            onChange={(yt) => onChange({ youtube: yt })}
+            videos={videos}
+            selectedVideoId={pairings.youtube}
+            onVideoChange={(id) => onPairingChange("youtube", id)}
+            onRegenerate={() => onRegenerate("youtube")}
+            regenerating={regenerating.has("youtube")}
+          />
+        ) : (
+          <PlatformCard
+            key={p}
+            platform={p}
+            value={values?.[p] ?? ""}
+            onChange={(v) => onChange({ [p]: v } as Partial<Rewrites>)}
+            videos={videos}
+            selectedVideoId={pairings[p]}
+            onVideoChange={(id) => onPairingChange(p, id)}
+            onRegenerate={() => onRegenerate(p)}
+            regenerating={regenerating.has(p)}
+          />
+        ),
+      )}
     </div>
   );
 }

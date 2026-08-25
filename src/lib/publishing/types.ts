@@ -1,7 +1,8 @@
 /**
- * Publishing abstraction types — TASK-050 (PRD § 4).
+ * Publishing abstraction types — TASK-050, aligned to Post for Me verified
+ * contract (TASK-051b, source: vendor NestJS DTOs).
  *
- * All composer/ship code depends on these types + the `publish` function in
+ * All composer/ship code depends on these types + the `publish` gate in
  * ./index.ts — never on Post for Me directly. Swapping providers (Postiz,
  * direct APIs) means writing one new PublishingClient.
  */
@@ -37,20 +38,39 @@ export type MediaItem = {
   aspectRatio?: string;
 };
 
-/** One publish destination: a connected social account at the provider. */
+/**
+ * One publish destination: a connected social account at the provider.
+ * Caption + media are resolved PER TARGET by the caller (ship action) —
+ * they ride to PFM as account_configurations overrides.
+ */
 export type PublishTarget = {
   platform: Platform;
   /** Provider's connected-account id (Post for Me: `sa_…`). */
   socialAccountId: string;
+  /** Final caption text for this platform (already platform-native). */
+  caption: string;
+  /** Media paired with THIS platform. */
+  media: MediaItem[];
+};
+
+/** Native YouTube structured fields (PFM maps these to snippet.*). */
+export type YoutubePublishConfig = {
+  title: string;
+  description: string;
+  tags: string[];
 };
 
 export type PublishRequest = {
+  /** Base/fallback caption; per-target captions ride on targets. */
   masterDescription: string;
   captions: CaptionSet;
+  /** Union of all target media (deduped by the caller). */
   media: MediaItem[];
-  /** Which paired media goes to which platform (by media.url). */
-  pairing: Record<Platform, string>;
   targets: PublishTarget[];
+  /** Structured YouTube fields (only when youtube ∈ targets). */
+  youtube?: YoutubePublishConfig;
+  /** Idempotency key — we pass posts._id so retries never double-bill. */
+  externalId?: string;
 };
 
 export type PlatformResultStatus =

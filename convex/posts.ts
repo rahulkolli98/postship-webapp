@@ -84,6 +84,8 @@ export const create = mutation({
     videos: v.array(videoValidator),
     rewrites: rewritesValidator,
     pairings: pairingsValidator,
+    // TASK-045b: founder-selected ship targets. Defaults to all six.
+    platforms: v.optional(v.array(v.string())),
   },
   returns: v.id("posts"),
   handler: async (ctx, args): Promise<Id<"posts">> => {
@@ -110,9 +112,16 @@ export const create = mutation({
       throw new ConvexError("Add 1 or 2 videos before shipping.");
     }
 
-    // Every pairing must reference an attached video.
+    // Every INTENDED platform's pairing must reference an attached video.
+    const intended = args.platforms ?? [...PLATFORM_KEYS];
+    const invalidPlatform = intended.find(
+      (p) => !(PLATFORM_KEYS as readonly string[]).includes(p),
+    );
+    if (invalidPlatform) {
+      throw new ConvexError(`Unknown platform: ${invalidPlatform}`);
+    }
     const attached = new Set<string>(args.videos.map((v) => String(v.storageId)));
-    for (const key of PLATFORM_KEYS) {
+    for (const key of intended as (typeof PLATFORM_KEYS)[number][]) {
       if (!attached.has(args.pairings[key])) {
         throw new ConvexError(`Pairing for ${key} references a video that isn't attached.`);
       }
@@ -125,6 +134,7 @@ export const create = mutation({
       videos: args.videos,
       rewrites: args.rewrites,
       pairings: args.pairings,
+      platforms: intended,
       platformResults: {
         youtube: { status: "queued" },
         linkedin: { status: "queued" },
@@ -222,24 +232,6 @@ export const ship = action({
       throw new ConvexError({ code: "NOT_FOUND", message: "Post not found." });
     }
 
-    // ── Connected targets (raw rows incl. provider account ids) ────────
-    const accountRows = await ctx.runQuery(internal.accounts.listInternal, {
-      userId: user._id,
-    });
-    const targets = accountRows
-      .filter((a) => a.platformUserId)
-      .map((a) => ({
-        platform: a.platform,
-        socialAccountId: a.platformUserId,
-      }));
-    if (targets.length === 0) {
-      throw new ConvexError({
-        code: "NO_CONNECTIONS",
-        message:
-          "No platforms connected yet. Connect via Post for Me to start shipping.",
-      });
-    }
-
     // ── Signed media URLs (PFM fetches from these) ─────────────────────
     const urlById = new Map<string, string>();
     for (const video of post.videos) {
@@ -252,17 +244,57 @@ export const ship = action({
       }
       urlById.set(String(video.storageId), url);
     }
-    const media = post.videos.map((v) => ({
-      url: urlById.get(String(v.storageId)) as string,
-      filename: v.filename,
-      aspectRatio: v.aspectRatio,
-    }));
-    const pairing = Object.fromEntries(
-      PLATFORM_KEYS.map((p) => {
-        const storageId = post.pairings[p];
-        return [p, urlById.get(storageId) ?? ""];
-      }),
-    ) as Record<(typeof PLATFORM_KEYS)[number], string>;
+
+    // ── Connected targets ∩ founder-selected platforms ─────────────────
+    const intended: string[] = post.platforms ?? [...PLATFORM_KEYS];
+    const accountRows = await ctx.runQuery(internal.accounts.listInternal, {
+      userId: user._id,
+    });
+    type Target = {
+      platform: (typeof PLATFORM_KEYS)[number];
+      socialAccountId: string;
+      caption: string;
+      media: Array<{ url: string; filename: string; aspectRatio?: string }>;
+    };
+    const targets: Target[] = [];
+    for (const row of accountRows) {
+      if (!row.platformUserId) continue;                     // not connected
+      if (!intended.includes(row.platform)) continue;        // deselected
+
+      const storageId = post.pairings[row.platform];
+      const url = storageId ? urlById.get(storageId) : undefined;
+      const media = url
+        ? [{
+            url,
+            filename:
+              post.videos.find((v) => String(v.storageId) === storageId)
+                ?.filename ?? "video",
+            aspectRatio:
+              post.videos.find((v) => String(v.storageId) === storageId)
+                ?.aspectRatio,
+          }]
+        : [];
+
+      // Quota care: only bill platforms with real content. YouTube carries
+      // structured fields instead of a caption.
+      if (row.platform === "youtube") {
+        const yt = post.rewrites.youtube;
+        if (!yt.title && !yt.description) continue;
+        targets.push({ platform: row.platform, socialAccountId: row.platformUserId, caption: "", media });
+      } else {
+        const caption = post.rewrites[row.platform] ?? "";
+        if (caption.trim().length === 0) continue;
+        targets.push({ platform: row.platform, socialAccountId: row.platformUserId, caption, media });
+      }
+    }
+
+    if (targets.length === 0) {
+      throw new ConvexError({
+        code: "NO_CONNECTIONS",
+        message:
+          "Nothing to ship yet — connect a platform and add captions for your selected networks.",
+      });
+    }
 
     // ── Publish via abstraction ────────────────────────────────────────
     const apiKey = env.POSTFORME_API_KEY ?? null;
@@ -277,9 +309,16 @@ export const ship = action({
     const results = await publish(client, {
       masterDescription: post.masterDescription,
       captions: post.rewrites,
-      media,
-      pairing,
+      media: post.videos.map((v) => ({
+        url: urlById.get(String(v.storageId)) as string,
+        filename: v.filename,
+        aspectRatio: v.aspectRatio,
+      })),
       targets,
+      youtube: targets.some((t) => t.platform === "youtube")
+        ? post.rewrites.youtube
+        : undefined,
+      externalId: String(post._id),
     });
 
     // ── Persist results + meter the attempt ────────────────────────────
