@@ -9,6 +9,7 @@
  */
 
 import type * as accounts from "../accounts.js";
+import type * as posts from "../posts.js";
 import type * as rewrites from "../rewrites.js";
 import type * as uploads from "../uploads.js";
 import type * as users from "../users.js";
@@ -21,6 +22,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
+  posts: typeof posts;
   rewrites: typeof rewrites;
   uploads: typeof uploads;
   users: typeof users;

@@ -2,7 +2,8 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentUser } from "./users";
 
-const PLATFORM = v.union(
+/** Shared six-platform union validator (used by posts.pairings too). */
+export const PLATFORM = v.union(
   v.literal("youtube"),
   v.literal("linkedin"),
   v.literal("x"),

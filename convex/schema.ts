@@ -2,11 +2,26 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 /**
+ * Per-platform publish outcome (PRD § 3). Shared validator so create/ship/
+ * retry stay in lockstep.
+ */
+const platformResult = {
+  status: v.union(
+    v.literal("queued"),
+    v.literal("uploading"),
+    v.literal("posted"),
+    v.literal("failed"),
+  ),
+  url: v.optional(v.string()),
+  error: v.optional(v.string()),
+  postedAt: v.optional(v.number()),
+};
+
+/**
  * Convex schema — webapp.
  *
- * Phase 1 scope: `users` + `accounts` (TASK-018/020/024). The rest of PRD § 3
- * lands with its owning tasks: `posts` with TASK-049. The landing app owns
- * `waitlist` exclusively — do NOT copy it here.
+ * Phase 2 scope: `users`, `accounts`, `posts` (TASK-049). The landing app
+ * owns `waitlist` exclusively — do NOT copy it here.
  */
 export default defineSchema({
   users: defineTable({
@@ -61,4 +76,57 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_userId_platform", ["userId", "platform"]),
+
+  /**
+   * Posts — PRD § 3. One row per Ship attempt (drafts are the composer's
+   * ephemeral state until this row exists).
+   *
+   * DEVIATION from PRD literal (2026-08-23, founder-approved): `pairings`
+   * maps platform → **storageId** instead of video array index — indexes
+   * silently change meaning when videos are removed/reordered; ids don't.
+   */
+  posts: defineTable({
+    userId: v.id("users"),
+    masterDescription: v.string(),
+    videos: v.array(
+      v.object({
+        storageId: v.id("_storage"),
+        filename: v.string(),
+        durationSeconds: v.optional(v.number()),
+        aspectRatio: v.optional(v.string()), // "16:9" | "9:16" | "1:1"
+      }),
+    ),
+    rewrites: v.object({
+      youtube: v.object({
+        title: v.string(),
+        description: v.string(),
+        tags: v.array(v.string()),
+      }),
+      linkedin: v.string(),
+      x: v.string(),
+      threads: v.string(),
+      instagram: v.string(),
+      tiktok: v.string(),
+    }),
+    pairings: v.object({
+      youtube: v.string(), // storageId
+      linkedin: v.string(),
+      x: v.string(),
+      threads: v.string(),
+      instagram: v.string(),
+      tiktok: v.string(),
+    }),
+    publishedAt: v.optional(v.number()),
+    platformResults: v.object({
+      youtube: v.optional(v.object(platformResult)),
+      linkedin: v.optional(v.object(platformResult)),
+      x: v.optional(v.object(platformResult)),
+      threads: v.optional(v.object(platformResult)),
+      instagram: v.optional(v.object(platformResult)),
+      tiktok: v.optional(v.object(platformResult)),
+    }),
+    createdAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_createdAt", ["userId", "createdAt"]),
 });
