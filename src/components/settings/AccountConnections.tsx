@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Authenticated, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import {
@@ -16,15 +16,14 @@ import {
 } from "@/components/ui/alert-dialog";
 
 /**
- * Account connections panel — TASK-026 (PRD § 8 Screen: Settings - Accounts).
+ * Account connections panel — TASK-026/053.
  *
- * Shows connection status per platform and the single "Connect via
- * Post for Me" entry point (never six separate buttons).
+ * Per-platform connect links hit our OAuth start route
+ * (/api/oauth/postforme/start?platform=…) which redirects into PFM's hosted
+ * consent for that ONE network (vendor reality — consent is per platform).
+ * The callback syncs sa_ ids back into Convex accounts.
  *
- * TASK-027 adds per-platform Disconnect here. TASK-053 (Phase 2) replaces
- * the placeholder onClick with the real Post for Me hosted-OAuth redirect
- * (/api/oauth/postforme/start); until then clicking explains the state
- * instead of 404ing.
+ * TASK-027 owns the disconnect (×) flow here.
  */
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -34,6 +33,14 @@ const PLATFORM_LABELS: Record<string, string> = {
   threads: "Threads",
   instagram: "Instagram",
   tiktok: "TikTok",
+};
+
+const ALL_PLATFORMS = ["youtube", "linkedin", "x", "threads", "instagram", "tiktok"] as const;
+
+const PARAM_MESSAGES: Record<string, string> = {
+  "postforme-not-configured":
+    "Publishing isn't configured yet. Set POSTFORME_API_KEY and reload.",
+  "sync-failed": "We connected you on Post for Me but couldn't sync it just now. Try again in a minute.",
 };
 
 export function AccountConnections() {
@@ -48,16 +55,31 @@ function Panel() {
   const accounts = useQuery(api.accounts.list);
   const disconnectPlatform = useMutation(api.accounts.disconnect);
   const [pending, setPending] = useState<string | null>(null);
-  const [notice, setNotice] = useState(false);
+  const [banner, setBanner] = useState<string | null>(null);
 
   const loading = accounts === undefined;
   const connected = accounts ?? [];
+  const connectedPlatforms = new Set(connected.map((a) => a.platform));
+  const missing = ALL_PLATFORMS.filter((p) => !connectedPlatforms.has(p));
   const hasConnections = connected.length > 0;
 
-  function handleConnect() {
-    // TODO(TASK-053): window.location.href = "/api/oauth/postforme/start"
-    setNotice(true);
-  }
+  // Read ?connected=N / ?error=… once on mount (set by the OAuth callback).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const n = params.get("connected");
+    if (n !== null && n !== "0") {
+      setBanner(`Connected ${n} new platform${n === "1" ? "" : "s"} via Post for Me.`);
+    } else if (n === "0") {
+      setBanner("No new platforms were connected on that pass.");
+    }
+    const err = params.get("error");
+    if (err) {
+      setBanner(
+        PARAM_MESSAGES[err] ??
+          "Something went wrong connecting that platform. Try again.",
+      );
+    }
+  }, []);
 
   function handleDisconnect(platform: string) {
     void disconnectPlatform({
@@ -90,8 +112,8 @@ function Panel() {
 
           {!hasConnections ? (
             <p className="mt-4 max-w-[560px] font-sans text-[15px] leading-[1.55] text-on-surface-muted">
-              Nothing connected yet. One Post for Me connection lights up all
-              six networks at once.
+              Nothing connected yet. Pick a network below to run its one-time
+              Post for Me consent.
             </p>
           ) : (
             <>
@@ -153,24 +175,35 @@ function Panel() {
             </>
           )}
 
-          <div className="mt-8 flex flex-col gap-3">
-            {/* Single entry point — PRD FR-002, never per-platform buttons */}
-            <button
-              type="button"
-              onClick={handleConnect}
-              data-testid="connect-platforms"
-              className="inline-flex h-11 w-fit items-center justify-center rounded-md bg-primary px-6 font-sans text-sm font-medium text-primary-foreground transition-colors hover:bg-accent hover:text-on-accent"
-            >
-              Connect via Post for Me
-            </button>
+          <div className="mt-8 flex flex-col gap-4">
+            {/* Per-network consent (vendor reality): one link per missing
+                platform, each opening PFM's hosted auth for that network. */}
+            {missing.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
+                  Connect a network
+                </p>
+                <div className="flex flex-wrap gap-2" data-testid="connect-platforms">
+                  {missing.map((p) => (
+                    <a
+                      key={p}
+                      href={`/api/oauth/postforme/start?platform=${p}`}
+                      data-testid={`connect-${p}`}
+                      className="inline-flex h-9 items-center justify-center rounded-md border-2 border-border-strong bg-surface-raised px-4 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface transition-colors hover:bg-primary hover:text-primary-foreground"
+                    >
+                      Connect {PLATFORM_LABELS[p]}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
 
-            {notice && (
+            {banner && (
               <p
                 role="status"
                 className="max-w-[560px] rounded-md border border-border bg-surface-raised px-4 py-3 font-sans text-[13px] leading-[1.5] text-on-surface-muted"
               >
-                Heads up: the live connection flow ships in Phase 2. Your
-                composer and workspace are ready for it.
+                {banner}
               </p>
             )}
           </div>

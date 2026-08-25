@@ -104,6 +104,71 @@ export const disconnect = mutation({
  * "Disconnect all" removes every row for the caller in one go.
  */
 /**
+ * TASK-053: upsert a PFM-connected platform for the given Clerk user.
+ *
+ * PUBLIC mutation (called from the OAuth callback HTTP route via
+ * ConvexHttpClient, which cannot invoke internals) — same documented
+ * bounded-harm tradeoff as users.upsertFromClerk. Hardening idea once
+ * routes obtain Convex auth tokens: flip to internal + identity check.
+ *
+ * Harm model if forged: attacker attaches THEIR sa_ ids to a victim's row;
+ * victim ships would publish to attacker-owned accounts (attacker gains
+ * nothing) or spam rows. Platform is constrained to the six literals and
+ * rows per call are capped upstream.
+ */
+export const upsertFromPostForMe = mutation({
+  args: {
+    clerkUserId: v.string(),
+    platform: PLATFORM,
+    platformUserId: v.string(),
+    platformUsername: v.optional(v.string()),
+    platformDisplayName: v.optional(v.string()),
+    platformAvatarUrl: v.optional(v.string()),
+    accessToken: v.string(), // sentinel "__PFM_MANAGED__" — PFM owns tokens
+  },
+  returns: v.id("accounts"),
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", args.clerkUserId),
+      )
+      .unique();
+    if (user === null) {
+      throw new Error("Unknown user: sign up before connecting platforms.");
+    }
+
+    const existing = await ctx.db
+      .query("accounts")
+      .withIndex("by_userId_platform", (q) =>
+        q.eq("userId", user._id).eq("platform", args.platform),
+      )
+      .first();
+
+    const fields = {
+      platformUserId: args.platformUserId,
+      platformUsername: args.platformUsername,
+      platformDisplayName: args.platformDisplayName,
+      platformAvatarUrl: args.platformAvatarUrl,
+      accessToken: args.accessToken,
+    };
+
+    if (existing !== null) {
+      await ctx.db.patch(existing._id, fields);
+      return existing._id;
+    }
+
+    return await ctx.db.insert("accounts", {
+      userId: user._id,
+      platform: args.platform,
+      ...fields,
+      scopes: ["posts"],
+      connectedAt: Date.now(),
+    });
+  },
+});
+
+/**
  * Internal raw-rows query for server-side flows (TASK-052 ship). Unlike
  * the public `list`, this INCLUDES tokens + provider account ids — it must
  * never be registered as a public function.
