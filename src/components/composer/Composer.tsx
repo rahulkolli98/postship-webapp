@@ -38,6 +38,24 @@ const ALL_PLATFORMS = [
 ] as const satisfies readonly Platform[];
 
 /**
+ * TASK-048: overwrite only the requested platforms' slices. The action
+ * returns "" for non-requested platforms — a naive spread would wipe cards.
+ */
+function mergeRewrites(
+  prev: Rewrites,
+  fresh: Rewrites,
+  platforms: Platform[],
+): Rewrites {
+  const next = { ...prev };
+  for (const p of platforms) {
+    // Handle youtube separately so TS can correlate key→value types.
+    if (p === "youtube") next.youtube = fresh.youtube;
+    else next[p] = fresh[p];
+  }
+  return next;
+}
+
+/**
  * TASK-046 pairing preferences. Founder call (2026-08-23): Threads prefers
  * PORTRAIT when both orientations exist; everything else follows PRD
  * FR-007 defaults (YouTube/LinkedIn/X landscape-first, IG/TikTok portrait).
@@ -100,6 +118,8 @@ function ComposerCanvas() {
   // Platforms the user manually changed (TASK-046): auto-defaults never
   // overwrite these until their video is removed.
   const [overrides, setOverrides] = useState<Set<Platform>>(new Set());
+  // TASK-048: platforms with a regenerate call in flight (per-card spinner).
+  const [regenerating, setRegenerating] = useState<Set<Platform>>(new Set());
 
   function handleFilesChange(next: UploadedFile[]) {
     const validIds = new Set(next.map((f) => String(f.storageId)));
@@ -142,8 +162,13 @@ function ComposerCanvas() {
     setGenerating(true);
     setGenerateError(null);
     try {
-      const result = await generate({ masterDescription });
-      setRewrites(result);
+      const result = await generate({
+        masterDescription,
+        platforms: [...ALL_PLATFORMS],
+        mode: "generate",
+      });
+      // First generation replaces wholesale; later ones merge (TASK-048).
+      setRewrites((prev) => (prev ? mergeRewrites(prev, result, [...ALL_PLATFORMS]) : result));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/AI not configured/i.test(msg)) {
@@ -153,6 +178,34 @@ function ComposerCanvas() {
       }
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleRegenerate(platform: Platform) {
+    // Single-flight in v1; unlimited regens by policy (Option A).
+    if (!rewrites || generating || regenerating.size > 0) return;
+    setRegenerating((prev) => new Set(prev).add(platform));
+    setGenerateError(null);
+    try {
+      // Uses the CURRENT master description — that's the point of "fix this one".
+      const fresh = await generate({
+        masterDescription,
+        platforms: [platform],
+        mode: "regenerate",
+      });
+      // Selective merge: fresh has "" for non-requested platforms — a naive
+      // spread would wipe the other five cards.
+      setRewrites((prev) => (prev ? mergeRewrites(prev, fresh, [platform]) : prev));
+    } catch {
+      setGenerateError(
+        `Couldn't regenerate ${PLATFORM_LABELS[platform]}. Try again.`,
+      );
+    } finally {
+      setRegenerating((prev) => {
+        const next = new Set(prev);
+        next.delete(platform);
+        return next;
+      });
     }
   }
 
@@ -212,6 +265,8 @@ function ComposerCanvas() {
                   setOverrides((prev) => new Set(prev).add(platform));
                 }}
                 onChange={(patch) => setRewrites((prev) => (prev ? { ...prev, ...patch } : prev))}
+                onRegenerate={handleRegenerate}
+                regenerating={regenerating}
               />
             )}
             {hasConnections ? (
@@ -301,12 +356,16 @@ function RewritesGrid({
   pairings,
   onPairingChange,
   onChange,
+  onRegenerate,
+  regenerating,
 }: {
   rewrites: Rewrites;
   videos: VideoOption[];
   pairings: Partial<Record<Platform, string>>;
   onPairingChange: (platform: Platform, storageId: string) => void;
   onChange: (patch: Partial<Rewrites>) => void;
+  onRegenerate: (platform: Platform) => void;
+  regenerating: Set<Platform>;
 }) {
   const others = ["linkedin", "x", "threads", "instagram", "tiktok"] as const;
 
@@ -318,6 +377,8 @@ function RewritesGrid({
         videos={videos}
         selectedVideoId={pairings.youtube}
         onVideoChange={(id) => onPairingChange("youtube", id)}
+        onRegenerate={() => onRegenerate("youtube")}
+        regenerating={regenerating.has("youtube")}
       />
       {others.map((p) => (
         <PlatformCard
@@ -328,6 +389,8 @@ function RewritesGrid({
           videos={videos}
           selectedVideoId={pairings[p]}
           onVideoChange={(id) => onPairingChange(p, id)}
+          onRegenerate={() => onRegenerate(p)}
+          regenerating={regenerating.has(p)}
         />
       ))}
     </div>

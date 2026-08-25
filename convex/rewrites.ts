@@ -75,6 +75,9 @@ export const generate = action({
   args: {
     masterDescription: v.string(),
     platforms: v.optional(v.array(PLATFORM_UNION)),
+    // TASK-048: distinguishes full generation from single-card regeneration
+    // so usage metrics (Phase 3) can count them separately.
+    mode: v.optional(v.union(v.literal("generate"), v.literal("regenerate"))),
   },
   returns: v.object({
     youtube: v.object({
@@ -120,6 +123,12 @@ export const generate = action({
       "instagram",
       "tiktok",
     ];
+
+    // Interim usage telemetry (greppable in Convex/Cloudflare logs until
+    // PostHog lands in TASK-070). Regens count separately via mode.
+    console.log(
+      `[ai] mode=${args.mode ?? "generate"} platforms=${requested.join(",")} model=${model ?? "default"} user=${user._id}`,
+    );
 
     // YouTube is JSON-structured; others are plain strings.
     const youtubeRaw = requested.includes("youtube")
