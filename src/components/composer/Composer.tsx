@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Authenticated,
   AuthLoading,
@@ -144,10 +144,10 @@ function ComposerCanvas() {
   const [shipping, setShipping] = useState(false);
   const [shipError, setShipError] = useState<{ text: string; connect?: boolean; upgrade?: boolean } | null>(null);
   const [shipResults, setShipResults] = useState<PublishResult | null>(null);
-  // TASK-045b: founder-selected ship targets. Default = all six on.
-  const [selected, setSelected] = useState<Set<Platform>>(
-    new Set(ALL_PLATFORMS),
-  );
+  // TASK-045b: founder-selected ship targets. TASK-054b: default to
+  // CONNECTED platforms only (accounts query lands async → hydrate once).
+  const [selected, setSelected] = useState<Set<Platform>>(new Set());
+  const selectionHydrated = useRef(false);
 
   function togglePlatform(platform: Platform) {
     setSelected((prev) => {
@@ -254,6 +254,14 @@ function ComposerCanvas() {
 
   const connected = accounts ?? [];
   const hasConnections = connected.length > 0;
+
+  // Hydrate selection once accounts load: default to connected platforms.
+  if (accounts !== undefined && !selectionHydrated.current) {
+    selectionHydrated.current = true;
+    if (hasConnections) {
+      setSelected(new Set(connected.map((a) => a.platform as Platform)));
+    }
+  }
 
   // ── TASK-054: ship pipeline ──────────────────────────────────────────
   // Content readiness: video + selection + at least one non-empty caption
