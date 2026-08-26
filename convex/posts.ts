@@ -457,3 +457,78 @@ export const discardDraft = mutation({
     return null;
   },
 });
+// ── Post history (TASK-059, PRD FR-009) ─────────────────────────────────
+
+const historyEntryValidator = v.object({
+  _id: v.id("posts"),
+  _creationTime: v.number(),
+  masterDescription: v.string(),
+  platforms: v.optional(v.array(v.string())),
+  status: v.optional(v.literal("draft")),
+  publishedAt: v.optional(v.number()),
+  platformResults: v.object({
+    youtube: v.optional(resultEntry),
+    linkedin: v.optional(resultEntry),
+    x: v.optional(resultEntry),
+    threads: v.optional(resultEntry),
+    instagram: v.optional(resultEntry),
+    tiktok: v.optional(resultEntry),
+  }),
+  rewrites: rewritesValidator,
+});
+
+/**
+ * TASK-059: last 50 shipped posts (reverse-chronological) + all drafts
+ * (most recent first), in one query. Rewrites included — the expanded
+ * history row shows full captions. Videos/storageIds intentionally
+ * excluded (not needed for display; keeps payload lean).
+ */
+export const listHistory = query({
+  args: {},
+  returns: v.object({
+    shipped: v.array(historyEntryValidator),
+    drafts: v.array(historyEntryValidator),
+  }),
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      return { shipped: [], drafts: [] };
+    }
+
+    const rows = await ctx.db
+      .query("posts")
+      .withIndex("by_userId_createdAt", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .take(60); // headroom so 50 shipped + drafts both survive the cut
+
+    const shipped = rows
+      .filter((r) => r.status !== "draft")
+      .slice(0, 50)
+      .map((r) => ({
+        _id: r._id,
+        _creationTime: r._creationTime,
+        masterDescription: r.masterDescription,
+        platforms: r.platforms,
+        status: r.status,
+        publishedAt: r.publishedAt,
+        platformResults: r.platformResults,
+        rewrites: r.rewrites,
+      }));
+
+    const drafts = rows
+      .filter((r) => r.status === "draft")
+      .slice(0, 10)
+      .map((r) => ({
+        _id: r._id,
+        _creationTime: r._creationTime,
+        masterDescription: r.masterDescription,
+        platforms: r.platforms,
+        status: r.status,
+        publishedAt: r.publishedAt,
+        platformResults: r.platformResults,
+        rewrites: r.rewrites,
+      }));
+
+    return { shipped, drafts };
+  },
+});
