@@ -117,6 +117,8 @@ export default defineSchema({
       tiktok: v.string(),
     }),
     publishedAt: v.optional(v.number()),
+    /** TASK-056b: "draft" = saved work-in-progress (resumable). Absent = shipped row. */
+    status: v.optional(v.literal("draft")),
     /** Intended ship targets (founder-selected in composer). Optional for rows created before TASK-045b. */
     platforms: v.optional(v.array(v.string())),
     platformResults: v.object({

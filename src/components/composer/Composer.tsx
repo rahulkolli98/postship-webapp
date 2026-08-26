@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Authenticated,
   AuthLoading,
@@ -10,6 +10,7 @@ import {
   useQuery,
 } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { TrialCounter } from "./TrialCounter";
 import { VideoUploader, type UploadedFile } from "./VideoUploader";
 import { MasterDescription } from "./MasterDescription";
@@ -123,12 +124,19 @@ function ComposerCanvas() {
   const accounts = useQuery(api.accounts.list);
   const generate = useAction(api.rewrites.generate);
   const createPost = useMutation(api.posts.create);
+  const updateDraft = useMutation(api.posts.updateDraft);
+  const discardDraftMutation = useMutation(api.posts.discardDraft);
   const shipPost = useAction(api.posts.ship);
   const [masterDescription, setMasterDescription] = useState("");
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
-  // Ephemeral until posts.create (TASK-049) persists drafts. A future `drafts`
-  // table (noted in docs/project-context.md) will make this survive refresh.
+  // TASK-056b: the loaded draft row (null = fresh composition).
+  const draft = useQuery(api.posts.latestDraft);
+  const [draftId, setDraftId] = useState<Id<"posts"> | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const [draftFiles, setDraftFiles] = useState<UploadedFile[] | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [draftBanner, setDraftBanner] = useState<string | null>(null);
   const [rewrites, setRewrites] = useState<Rewrites | null>(null);
   // Live mirror of VideoUploader state (TASK-045): feeds pairing dropdowns
   // and, later, posts.create.
@@ -144,6 +152,8 @@ function ComposerCanvas() {
   const [shipping, setShipping] = useState(false);
   const [shipError, setShipError] = useState<{ text: string; connect?: boolean; upgrade?: boolean } | null>(null);
   const [shipResults, setShipResults] = useState<PublishResult | null>(null);
+  // TASK-056b: hydrated draft videos → passed into VideoUploader once.
+  const hydratedRef = useRef(false);
   // TASK-045b: founder-selected ship targets. TASK-054b: default to
   // CONNECTED platforms only (accounts query lands async → hydrate once).
   const [selected, setSelected] = useState<Set<Platform>>(new Set());
@@ -197,6 +207,104 @@ function ComposerCanvas() {
       filename,
     }),
   );
+
+  // ── TASK-056b: draft hydration ───────────────────────────────────────
+  const draftVideoIds = (draft?.videos ?? []).map((v) => v.storageId);
+  const draftUrls = useQuery(
+    api.uploads.getUrls,
+    hydrated || draftVideoIds.length === 0 ? "skip" : { ids: draftVideoIds },
+  );
+
+  useEffect(() => {
+    if (hydrated || draft === undefined) return;
+    hydratedRef.current = true;
+    setHydrated(true);
+
+    if (draft === null) return;
+    setDraftId(draft._id);
+    setMasterDescription(draft.masterDescription);
+    setRewrites(draft.rewrites);
+    setSelected(new Set((draft.platforms ?? []) as Platform[]));
+    setPairings(draft.pairings);
+    setDraftBanner(
+      `Draft restored · saved ${new Date(draft._creationTime).toLocaleString()}`,
+    );
+
+    // Videos hydrate in a second pass (signed URLs are a separate query).
+    if (draft.videos.length === 0) {
+      setDraftFiles([]);
+      return;
+    }
+  }, [draft, hydrated]);
+
+  useEffect(() => {
+    if (hydrated || !draft || draftUrls === undefined) return;
+    if (draft.videos.length === 0) {
+      setDraftFiles([]);
+      return;
+    }
+    const files: UploadedFile[] = draft.videos.map((v, i) => ({
+      storageId: v.storageId,
+      filename: v.filename,
+      blobUrl: draftUrls[i] ?? "",
+      aspectRatio: v.aspectRatio as UploadedFile["aspectRatio"],
+      durationSeconds: v.durationSeconds,
+    }));
+    setDraftFiles(files);
+  }, [draft, draftUrls, hydrated]);
+
+  function handleDiscard() {
+    if (draftId) void discardDraftMutation({ draftId });
+    setDraftId(null);
+    setDraftBanner(null);
+    setMasterDescription("");
+    setRewrites(null);
+    setUploads([]);
+    setPairings({});
+    setOverrides(new Set());
+    setShipResults(null);
+    selectionHydrated.current = false;
+    setDraftFiles(null);
+  }
+
+  async function handleSave() {
+    setSaveState("saving");
+    try {
+      const resolvedPairings = Object.fromEntries(
+        ALL_PLATFORMS.map((p) => [
+          p,
+          pairings[p] ?? String(uploads[0]?.storageId ?? ""),
+        ]),
+      ) as Record<Platform, string>;
+      const videos = uploads.map(
+        ({ storageId, filename, durationSeconds, aspectRatio }) => ({
+          storageId,
+          filename,
+          durationSeconds,
+          aspectRatio,
+        }),
+      );
+      const fields = {
+        masterDescription,
+        videos,
+        rewrites: rewrites ?? EMPTY_REWRITES,
+        pairings: resolvedPairings,
+        platforms: [...selected],
+      };
+      if (draftId) {
+        await updateDraft({ draftId, fields });
+      } else {
+        const id = await createPost({ ...fields, isDraft: true });
+        setDraftId(id);
+      }
+      setSaveState("saved");
+      setTimeout(() => setSaveState("idle"), 2500);
+    } catch (err) {
+      console.error("[draft] save failed:", err);
+      setSaveState("error");
+      setTimeout(() => setSaveState("idle"), 4000);
+    }
+  }
 
   async function handleGenerate() {
     if (masterDescription.length < 20 || selected.size === 0) return;
@@ -306,15 +414,24 @@ function ComposerCanvas() {
         }),
       );
 
-      // Manual mode: cards the user typed into but never generated are
-      // already in `rewrites` state — create persists whatever exists.
-      const postId = await createPost({
+      // TASK-056b: a loaded draft is PROMOTED (refreshed + unmarked) rather
+      // than duplicated; fresh compositions create a new row.
+      let postId: Id<"posts">;
+      const fields = {
         masterDescription,
         videos,
         rewrites: rewrites ?? EMPTY_REWRITES,
         pairings: resolvedPairings,
         platforms,
-      });
+      };
+      if (draftId) {
+        await updateDraft({ draftId, fields, promote: true });
+        postId = draftId;
+        setDraftId(null);
+        setDraftBanner(null);
+      } else {
+        postId = await createPost(fields);
+      }
 
       const res = await shipPost({ postId });
       setShipResults(res.results);
@@ -410,7 +527,27 @@ function ComposerCanvas() {
               </div>
             </div>
 
-            <VideoUploader onFilesChange={handleFilesChange} />
+            {draftBanner && (
+              <p
+                role="status"
+                data-testid="draft-restored-banner"
+                className="flex items-center justify-between rounded-md border border-border bg-surface-raised px-4 py-3 font-sans text-[13px] leading-[1.5] text-on-surface-muted"
+              >
+                <span>{draftBanner}</span>
+                <button
+                  type="button"
+                  onClick={handleDiscard}
+                  data-testid="discard-draft"
+                  className="underline transition-colors hover:text-error"
+                >
+                  Discard draft
+                </button>
+              </p>
+            )}
+            <VideoUploader
+              onFilesChange={handleFilesChange}
+              hydrateFrom={draftFiles ?? undefined}
+            />
             <MasterDescription
               value={masterDescription}
               onChange={setMasterDescription}
@@ -442,7 +579,27 @@ function ComposerCanvas() {
             />
 
             {/* TASK-054: ship pipeline */}
-            <ShipButton disabled={!canShip} shipping={shipping} onClick={handleShip} />
+            {/* TASK-056b: Save draft + Ship row */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saveState === "saving" || shipping}
+                data-testid="save-draft-button"
+                className="inline-flex h-12 items-center justify-center rounded-md border-2 border-border-strong bg-surface-raised px-5 font-sans text-sm font-medium text-on-surface transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
+              >
+                {saveState === "saving"
+                  ? "Saving…"
+                  : saveState === "saved"
+                    ? "Saved ✓"
+                    : saveState === "error"
+                      ? "Save failed"
+                      : "Save draft"}
+              </button>
+              <div className="flex-1">
+                <ShipButton disabled={!canShip} shipping={shipping} onClick={handleShip} />
+              </div>
+            </div>
             {shipError && (
               <p role="alert" className="rounded-md border border-error/40 bg-error/10 px-4 py-3 font-sans text-[13px] leading-[1.5] text-error">
                 {shipError.text}{" "}

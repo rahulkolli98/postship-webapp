@@ -36,3 +36,19 @@ export const getUrl = query({
     return await ctx.storage.getUrl(args.storageId);
   },
 });
+
+/**
+ * TASK-056b: batch signed URLs for draft resume — composer rebuilds video
+ * previews from persisted storageIds.
+ */
+export const getUrls = query({
+  args: { ids: v.array(v.id("_storage")) },
+  returns: v.array(v.union(v.string(), v.null())),
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      return args.ids.map(() => null);
+    }
+    return await Promise.all(args.ids.map((id) => ctx.storage.getUrl(id)));
+  },
+});

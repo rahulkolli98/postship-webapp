@@ -1,4 +1,4 @@
-import { action, internalMutation, internalQuery, mutation } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { ConvexError } from "convex/values";
 import { env } from "./_generated/server";
@@ -6,6 +6,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { assertUserCanPost } from "./_guards";
 import { PLATFORM } from "./accounts";
+import { getCurrentUser } from "./users";
 import { publish } from "../src/lib/publishing";
 import { createPostForMeClient } from "../src/lib/publishing/postforme";
 import type { PublishResult } from "../src/lib/publishing/types";
@@ -86,6 +87,9 @@ export const create = mutation({
     pairings: pairingsValidator,
     // TASK-045b: founder-selected ship targets. Defaults to all six.
     platforms: v.optional(v.array(v.string())),
+    // TASK-056b: save-as-draft — relaxes content/pairing checks, marks the
+    // row resumable, skips platformResults init.
+    isDraft: v.optional(v.boolean()),
   },
   returns: v.id("posts"),
   handler: async (ctx, args): Promise<Id<"posts">> => {
@@ -109,24 +113,31 @@ export const create = mutation({
     if (description.length > 10_000) {
       throw new ConvexError("Master description is too long.");
     }
-    if (args.videos.length < 1 || args.videos.length > 2) {
-      throw new ConvexError("Add 1 or 2 videos before shipping.");
+    // Drafts may have zero videos yet (save-early UX); ships need 1–2.
+    if (args.videos.length > 2) {
+      throw new ConvexError("Max 2 videos per post.");
+    }
+    if (!args.isDraft && args.videos.length < 1) {
+      throw new ConvexError("Add a video before shipping.");
     }
     // At least one intended platform must carry real content — prevents
-    // shipping fully empty posts in manual mode.
-    const hasContent = (args.platforms ?? [...PLATFORM_KEYS]).some((p) =>
-      p === "youtube"
-        ? args.rewrites.youtube.title.trim().length > 0 ||
-          args.rewrites.youtube.description.trim().length > 0
-        : (args.rewrites[p as Exclude<(typeof PLATFORM_KEYS)[number], "youtube">] ?? "").trim().length > 0,
-    );
-    if (!hasContent) {
-      throw new ConvexError(
-        "Add a caption for at least one platform before shipping.",
+    // shipping fully empty posts in manual mode. (Drafts exempt.)
+    if (!args.isDraft) {
+      const hasContent = (args.platforms ?? [...PLATFORM_KEYS]).some((p) =>
+        p === "youtube"
+          ? args.rewrites.youtube.title.trim().length > 0 ||
+            args.rewrites.youtube.description.trim().length > 0
+          : (args.rewrites[p as Exclude<(typeof PLATFORM_KEYS)[number], "youtube">] ?? "").trim().length > 0,
       );
+      if (!hasContent) {
+        throw new ConvexError(
+          "Add a caption for at least one platform before shipping.",
+        );
+      }
     }
 
     // Every INTENDED platform's pairing must reference an attached video.
+    // (Drafts exempt — user may not have paired everything yet.)
     const intended = args.platforms ?? [...PLATFORM_KEYS];
     const invalidPlatform = intended.find(
       (p) => !(PLATFORM_KEYS as readonly string[]).includes(p),
@@ -135,9 +146,11 @@ export const create = mutation({
       throw new ConvexError(`Unknown platform: ${invalidPlatform}`);
     }
     const attached = new Set<string>(args.videos.map((v) => String(v.storageId)));
-    for (const key of intended as (typeof PLATFORM_KEYS)[number][]) {
-      if (!attached.has(args.pairings[key])) {
-        throw new ConvexError(`Pairing for ${key} references a video that isn't attached.`);
+    if (!args.isDraft) {
+      for (const key of intended as (typeof PLATFORM_KEYS)[number][]) {
+        if (!attached.has(args.pairings[key])) {
+          throw new ConvexError(`Pairing for ${key} references a video that isn't attached.`);
+        }
       }
     }
 
@@ -149,6 +162,7 @@ export const create = mutation({
       rewrites: args.rewrites,
       pairings: args.pairings,
       platforms: intended,
+      ...(args.isDraft ? ({ status: "draft" } as const) : {}),
       platformResults: {
         youtube: { status: "queued" },
         linkedin: { status: "queued" },
@@ -211,11 +225,14 @@ export const applyShipUpdate = internalMutation({
  * Sequence: auth → gate (assertUserCanPost) → ownership → connected targets
  * → signed media URLs → publish() → applyShipUpdate → incrementTrialPosts.
  *
- * Attempt-based metering: the trial counter increments even if individual
- * platforms fail (founder-approved, TASK-052 plan). Final posted/failed
- * states arrive via PFM webhooks (TASK-056); results here start at
- * "uploading"/"failed".
- */
+  * Attempt-based metering: the trial counter increments even if individual
+  * platforms fail (founder-approved, TASK-052 plan). Final posted/failed
+  * states arrive via PFM webhooks (TASK-056); results here start at
+  * "uploading"/"failed".
+  *
+  * TASK-056b: shipping a loaded DRAFT promotes that row (fields refreshed,
+  * draft status cleared) instead of creating a duplicate.
+  */
 export const ship = action({
   args: { postId: v.id("posts") },
   returns: v.object({
@@ -346,5 +363,97 @@ export const ship = action({
     });
 
     return { postId, results };
+  },
+});
+
+// ── Draft save & resume (TASK-056b) ─────────────────────────────────────
+
+const draftFieldsValidator = v.object({
+  masterDescription: v.string(),
+  videos: v.array(videoValidator),
+  rewrites: rewritesValidator,
+  pairings: pairingsValidator,
+  platforms: v.array(v.string()),
+});
+
+/** Most recent draft for the caller, or null. Hydrates the composer. */
+export const latestDraft = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) return null;
+
+    const rows = await ctx.db
+      .query("posts")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    return (
+      rows
+        .filter((r) => r.status === "draft")
+        .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null
+    );
+  },
+});
+
+/**
+ * Refresh an existing draft's fields. Auth + ownership + still-a-draft
+ * checks; clears the draft status when promoted for ship (client does
+ * updateDraft → ship with the same id).
+ */
+export const updateDraft = mutation({
+  args: {
+    draftId: v.id("posts"),
+    fields: draftFieldsValidator,
+    promote: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { draftId, fields, promote }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) throw new Error("Not authenticated");
+    const user = await ctx.runQuery(internal.users.getByClerkId, {
+      clerkUserId: identity.subject,
+    });
+    if (user === null) throw new Error("Not authenticated");
+
+    const post = await ctx.db.get(draftId);
+    if (post === null || post.userId !== user._id) {
+      throw new ConvexError("Draft not found.");
+    }
+    if (post.status !== "draft") {
+      throw new ConvexError("This post was already shipped.");
+    }
+
+    await ctx.db.patch(draftId, {
+      masterDescription: fields.masterDescription,
+      videos: fields.videos,
+      rewrites: fields.rewrites,
+      pairings: fields.pairings,
+      platforms: fields.platforms,
+      // Promote (ship path): remove the draft marker entirely.
+      ...(promote ? { status: undefined } : {}),
+    });
+    return null;
+  },
+});
+
+/** Delete a draft row (user discard). Files remain for the 056 cron sweep. */
+export const discardDraft = mutation({
+  args: { draftId: v.id("posts") },
+  returns: v.null(),
+  handler: async (ctx, { draftId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) throw new Error("Not authenticated");
+    const user = await ctx.runQuery(internal.users.getByClerkId, {
+      clerkUserId: identity.subject,
+    });
+    if (user === null) throw new Error("Not authenticated");
+
+    const post = await ctx.db.get(draftId);
+    if (post === null || post.userId !== user._id) return null;
+    if (post.status !== "draft") return null;
+
+    await ctx.db.delete(draftId);
+    return null;
   },
 });

@@ -53,9 +53,12 @@ function validateFiles(
 
 export function VideoUploader({
   onFilesChange,
+  hydrateFrom,
 }: {
   /** Live mirror of uploaded files — parent uses it for pairing dropdowns + posts.create. */
   onFilesChange?: (files: UploadedFile[]) => void;
+  /** TASK-056b: hydrated draft videos (signed-URL previews) applied once. */
+  hydrateFrom?: UploadedFile[];
 } = {}) {
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -63,6 +66,15 @@ export function VideoUploader({
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // TASK-056b: apply hydrated draft videos exactly once per hydration prop.
+  const hydratedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (hydrateFrom && hydrateFrom.length > 0 && hydratedKeyRef.current !== "draft") {
+      hydratedKeyRef.current = "draft";
+      setFiles(hydrateFrom);
+    }
+  }, [hydrateFrom]);
 
   // Notify parent whenever files change (callback kept in a ref so we don't
   // re-fire when the parent re-renders with a new closure).
