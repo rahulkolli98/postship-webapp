@@ -29,7 +29,7 @@ import type {
  * and finalize via webhooks/status polling (TASK-056).
  */
 
-const DEFAULT_BASE_URL = "https://api.postforme.dev";
+const DEFAULT_BASE_URL = "https://api.postforme.dev/v1";
 
 export function createPostForMeClient(
   apiKey: string,

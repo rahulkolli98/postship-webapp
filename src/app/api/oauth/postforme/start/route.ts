@@ -16,7 +16,7 @@ import { currentUser } from "@clerk/nextjs/server";
  * PFM-side records can be correlated if support ever needs it.
  */
 
-const DEFAULT_BASE_URL = "https://api.postforme.dev";
+const DEFAULT_BASE_URL = "https://api.postforme.dev/v1";
 
 const VALID_PLATFORMS = new Set([
   "youtube",

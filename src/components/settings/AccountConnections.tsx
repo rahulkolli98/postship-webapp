@@ -41,6 +41,11 @@ const PARAM_MESSAGES: Record<string, string> = {
   "postforme-not-configured":
     "Publishing isn't configured yet. Set POSTFORME_API_KEY and reload.",
   "sync-failed": "We connected you on Post for Me but couldn't sync it just now. Try again in a minute.",
+  "pfm-auth-url-404":
+    "Post for Me doesn't have this platform enabled for your project yet — enable it in Project Setup on their dashboard, then retry.",
+  "pfm-auth-url-400": "Post for Me rejected the connection request for this platform.",
+  "pfm-no-url": "Post for Me didn't return a consent link. Try again, or check their dashboard.",
+  "pfm-start-failed": "Couldn't reach Post for Me. Check your connection and retry.",
 };
 
 export function AccountConnections() {

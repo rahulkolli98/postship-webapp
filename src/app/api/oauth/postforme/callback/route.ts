@@ -22,7 +22,7 @@ import { api } from "@/../convex/_generated/api";
  * schema requires an accessToken string, so we store a documented sentinel.
  */
 
-const DEFAULT_BASE_URL = "https://api.postforme.dev";
+const DEFAULT_BASE_URL = "https://api.postforme.dev/v1";
 
 /** Sentinel stored because PFM owns token lifecycles — never used by us. */
 const PFM_MANAGED_TOKEN = "__PFM_MANAGED__";
