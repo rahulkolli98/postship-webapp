@@ -160,3 +160,17 @@ export const incrementTrialPosts = internalMutation({
     return null;
   },
 });
+
+/**
+ * Dev/debug tool: reset a user's trial counter to zero. Runs via CLI
+ * (`npx convex run users:resetTrialPosts '{"userId":"…"}'`) — internal,
+ * so no client can reach it. Useful when test ships burn quota.
+ */
+export const resetTrialPosts = internalMutation({
+  args: { userId: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, { userId }) => {
+    await ctx.db.patch(userId, { trialPostsUsed: 0 });
+    return null;
+  },
+});

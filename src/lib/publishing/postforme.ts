@@ -38,10 +38,15 @@ export function createPostForMeClient(
   return {
     async publish(req: PublishRequest): Promise<PublishResult> {
       const body: Record<string, unknown> = {
+        // PFM requires a non-empty base caption at API level ("caption is
+        // required") even when every account overrides it. YouTube-only
+        // manual posts have neither a master description nor a caption
+        // override — "." satisfies the validator and never surfaces,
+        // because YouTube's description comes from platform_configurations.
         caption:
           req.masterDescription ||
           req.targets.find((t) => t.caption)?.caption ||
-          "",
+          ".",
         social_accounts: req.targets.map((t) => t.socialAccountId),
         media: dedupeByUrl(req.media).map((m) => ({ url: m.url })),
         external_id: req.externalId ?? null,
