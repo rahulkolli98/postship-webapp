@@ -84,7 +84,25 @@ export function createPostForMeClient(
         });
 
         if (!res.ok) {
-          return failAll(req, `Post for Me error ${res.status}`);
+          // PFM 400s carry { message, errors: [...] } — surface the REAL
+          // reason (e.g. "invalid social accounts, not owned by user").
+          const bodyText = await res.text().catch(() => "");
+          let detail = `Post for Me error ${res.status}`;
+          try {
+            const j = JSON.parse(bodyText) as {
+              message?: string;
+              errors?: string[];
+            };
+            if (Array.isArray(j?.errors) && j.errors.length > 0) {
+              detail = `Post for Me: ${j.errors.join("; ")}`;
+            } else if (j?.message) {
+              detail = `Post for Me: ${j.message}`;
+            }
+          } catch {
+            /* body wasn't JSON — keep generic */
+          }
+          console.error("[pfm] create rejected:", res.status, bodyText.slice(0, 500));
+          return failAll(req, detail);
         }
 
         const data = (await res.json().catch(() => ({}))) as {
