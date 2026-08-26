@@ -2,13 +2,22 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Authenticated, AuthLoading, useAction, useQuery } from "convex/react";
+import {
+  Authenticated,
+  AuthLoading,
+  useAction,
+  useMutation,
+  useQuery,
+} from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { TrialCounter } from "./TrialCounter";
 import { VideoUploader, type UploadedFile } from "./VideoUploader";
 import { MasterDescription } from "./MasterDescription";
 import { PlatformCard, YouTubeCard, type Platform, type VideoOption } from "./PlatformCard";
+import { ShipButton } from "./ShipButton";
+import { PublishProgress } from "./PublishProgress";
 import { computeDefaultPairings, type Orientation } from "../../lib/aspectRatio";
+import type { PublishResult } from "../../../src/lib/publishing/types";
 
 /**
  * Composer — TASK-023 (empty state) → TASK-045 (full wiring).
@@ -113,6 +122,8 @@ function Skeleton() {
 function ComposerCanvas() {
   const accounts = useQuery(api.accounts.list);
   const generate = useAction(api.rewrites.generate);
+  const createPost = useMutation(api.posts.create);
+  const shipPost = useAction(api.posts.ship);
   const [masterDescription, setMasterDescription] = useState("");
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -129,6 +140,10 @@ function ComposerCanvas() {
   const [overrides, setOverrides] = useState<Set<Platform>>(new Set());
   // TASK-048: platforms with a regenerate call in flight (per-card spinner).
   const [regenerating, setRegenerating] = useState<Set<Platform>>(new Set());
+  // TASK-054: ship pipeline state.
+  const [shipping, setShipping] = useState(false);
+  const [shipError, setShipError] = useState<{ text: string; connect?: boolean; upgrade?: boolean } | null>(null);
+  const [shipResults, setShipResults] = useState<PublishResult | null>(null);
   // TASK-045b: founder-selected ship targets. Default = all six on.
   const [selected, setSelected] = useState<Set<Platform>>(
     new Set(ALL_PLATFORMS),
@@ -240,6 +255,93 @@ function ComposerCanvas() {
   const connected = accounts ?? [];
   const hasConnections = connected.length > 0;
 
+  // ── TASK-054: ship pipeline ──────────────────────────────────────────
+  // Content readiness: video + selection + at least one non-empty caption
+  // among SELECTED platforms (YouTube counts via title/description).
+  function captionFilled(p: Platform): boolean {
+    if (!rewrites) return false;
+    if (p === "youtube") {
+      return (
+        rewrites.youtube.title.trim().length > 0 ||
+        rewrites.youtube.description.trim().length > 0
+      );
+    }
+    return (rewrites[p] ?? "").trim().length > 0;
+  }
+
+  const filledSelected = [...selected].filter(captionFilled);
+  const canShip =
+    uploads.length > 0 && selected.size > 0 && filledSelected.length > 0 && !shipping;
+
+  async function handleShip() {
+    if (!canShip || uploads.length === 0) return;
+
+    setShipping(true);
+    setShipError(null);
+    try {
+      const platforms = [...selected];
+
+      // Effective pairings: manual choice, else first upload fallback.
+      const resolvedPairings = Object.fromEntries(
+        ALL_PLATFORMS.map((p) => [
+          p,
+          pairings[p] ?? String(uploads[0]?.storageId ?? ""),
+        ]),
+      ) as Record<Platform, string>;
+
+      const videos = uploads.map(
+        ({ storageId, filename, durationSeconds, aspectRatio }) => ({
+          storageId,
+          filename,
+          durationSeconds,
+          aspectRatio,
+        }),
+      );
+
+      // Manual mode: cards the user typed into but never generated are
+      // already in `rewrites` state — create persists whatever exists.
+      const postId = await createPost({
+        masterDescription,
+        videos,
+        rewrites: rewrites ?? EMPTY_REWRITES,
+        pairings: resolvedPairings,
+        platforms,
+      });
+
+      const res = await shipPost({ postId });
+      setShipResults(res.results);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      let parsed: { message?: string; code?: string } | null = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        /* plain error string */
+      }
+
+      const code = parsed?.code ?? "";
+      const text = parsed?.message ?? "";
+
+      if (/Not authenticated/i.test(raw)) {
+        setShipError({ text: "Session expired. Refresh and sign in again." });
+      } else if (code === "NO_CONNECTIONS") {
+        setShipError({ text: text || "No platforms connected.", connect: true });
+      } else if (code === "TRIAL_EXPIRED" || code === "TRIAL_EXHAUSTED" || code === "UPGRADE_REQUIRED") {
+        setShipError({ text: text || "Upgrade to keep publishing.", upgrade: true });
+      } else if (/PUBLISHING_NOT_CONFIGURED/i.test(raw)) {
+        setShipError({ text: "Publishing backend not configured. Set POSTFORME_API_KEY (see docs/HANDOFF.md)." });
+      } else if (/MEDIA_MISSING/i.test(raw)) {
+        setShipError({ text: text || "A stored video went missing. Re-upload and try again." });
+      } else if (text) {
+        setShipError({ text });
+      } else {
+        setShipError({ text: "Couldn't ship. Try again." });
+      }
+    } finally {
+      setShipping(false);
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       {/* Header row */}
@@ -330,6 +432,26 @@ function ComposerCanvas() {
               onRegenerate={handleRegenerate}
               regenerating={regenerating}
             />
+
+            {/* TASK-054: ship pipeline */}
+            <ShipButton disabled={!canShip} shipping={shipping} onClick={handleShip} />
+            {shipError && (
+              <p role="alert" className="rounded-md border border-error/40 bg-error/10 px-4 py-3 font-sans text-[13px] leading-[1.5] text-error">
+                {shipError.text}{" "}
+                {shipError.connect && (
+                  <Link href="/settings/accounts" className="underline">
+                    Connect platforms
+                  </Link>
+                )}
+                {shipError.upgrade && (
+                  <span className="text-on-surface-muted">
+                    {" "}Billing arrives with Phase 3 — your drafts are safe.
+                  </span>
+                )}
+              </p>
+            )}
+            {shipResults && <PublishProgress results={shipResults} />}
+
             {hasConnections ? (
               <ConnectedState connected={connected} />
             ) : (
