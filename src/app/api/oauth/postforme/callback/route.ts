@@ -51,6 +51,10 @@ type PfmSocialAccount = {
   name?: string | null;
   avatar_url?: string | null;
   picture?: string | null;
+  profile_photo_url?: string | null;
+  /** Correlation key we stamped at connect time (= Clerk user id). */
+  external_id?: string | null;
+  status?: string;
 };
 
 export async function GET(request: Request) {
@@ -89,8 +93,16 @@ export async function GET(request: Request) {
       ? payload
       : (payload?.items ?? payload?.data ?? []);
 
+    // TASK-053b multi-user isolation: PFM returns EVERY account in our
+    // project. Only sync rows stamped with THIS user's external_id and
+    // still connected. (Dashboard-connected rows carry a different/absent
+    // external_id and are correctly skipped.)
+    const mine = rows.filter(
+      (r) => r.external_id === session.id && r.status === "connected",
+    );
+
     let synced = 0;
-    for (const row of rows.slice(0, 12)) {
+    for (const row of mine.slice(0, 12)) {
       // Cap per call; bounded-harm note lives on the mutation.
       const platform = normalizePlatform(row.platform ?? "");
       if (!platform || !row.id) continue;
@@ -109,7 +121,7 @@ export async function GET(request: Request) {
         platformDisplayName:
           row.display_name ?? row.name ?? row.username ?? undefined,
         platformAvatarUrl:
-          (row.avatar_url ?? row.picture) || undefined,
+          (row.profile_photo_url ?? row.avatar_url ?? row.picture) || undefined,
         accessToken: PFM_MANAGED_TOKEN,
       });
       synced++;
