@@ -100,16 +100,30 @@ export const create = mutation({
       throw new Error("Not authenticated");
     }
 
-    // ── Input sanity (PRD FR-003 / FR-004 / §11) ────────────────────────
+    // ── Input sanity ─────────────────────────────────────────────────────
+    // TASK-049b: master description is AI FUEL, not a publish requirement.
+    // Manual-mode posts carry their content in platform captions, so no
+    // minimum here (PRD FR-004's 20-char rule gates the Generate button
+    // client-side only). Length cap stays as a sanity ceiling.
     const description = args.masterDescription.trim();
-    if (description.length < 20) {
-      throw new ConvexError("Master description must be at least 20 characters.");
-    }
     if (description.length > 10_000) {
       throw new ConvexError("Master description is too long.");
     }
     if (args.videos.length < 1 || args.videos.length > 2) {
       throw new ConvexError("Add 1 or 2 videos before shipping.");
+    }
+    // At least one intended platform must carry real content — prevents
+    // shipping fully empty posts in manual mode.
+    const hasContent = (args.platforms ?? [...PLATFORM_KEYS]).some((p) =>
+      p === "youtube"
+        ? args.rewrites.youtube.title.trim().length > 0 ||
+          args.rewrites.youtube.description.trim().length > 0
+        : (args.rewrites[p as Exclude<(typeof PLATFORM_KEYS)[number], "youtube">] ?? "").trim().length > 0,
+    );
+    if (!hasContent) {
+      throw new ConvexError(
+        "Add a caption for at least one platform before shipping.",
+      );
     }
 
     // Every INTENDED platform's pairing must reference an attached video.
