@@ -47,3 +47,7 @@ next-env.d.ts
 # local dev artifacts
 convex-dev.log
 .clerk/
+
+# cloudflare worker build
+/.open-next/
+/.wrangler/

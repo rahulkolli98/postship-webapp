@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "postship-webapp",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": [
+    // Enable Node.js APIs — required for @opennextjs/cloudflare
+    "nodejs_compat",
+    // Allow fetching public URLs from your app
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "postship-webapp"
+    }
+  ],
+  "vars": {
+    "NEXTJS_ENV": "production"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
