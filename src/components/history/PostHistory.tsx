@@ -7,11 +7,12 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 /**
- * Post history — TASK-059 (PRD FR-009 / US-012).
+ * PostHistory — TASK-059 (PRD FR-009 / US-012).
  *
- * Two sections: Drafts (resumable via composer's auto-load) and Shipped
- * (collapsible rows: truncated description → full captions + posted URLs).
- * Status chips reuse the PublishProgress color language.
+ * Two sections: Shipped (last 50, expandable rows with full rewrites +
+ * result URLs) and Drafts (resumable — Resume bumps savedAt so the
+ * composer adopts it; Discard deletes). Design3 language: cream canvas,
+ * mono labels, hairline dividers, status chips in PublishProgress colors.
  */
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -23,223 +24,201 @@ const PLATFORM_LABELS: Record<string, string> = {
   tiktok: "TikTok",
 };
 
-const PLATFORM_ORDER = ["youtube", "linkedin", "x", "threads", "instagram", "tiktok"] as const;
-
 type ResultEntry = { status: string; url?: string; error?: string };
+type ResultsMap = Record<string, ResultEntry | undefined>;
 
-type HistoryEntry = {
-  _id: Id<"posts">;
-  _creationTime: number;
-  masterDescription: string;
-  platforms?: string[];
-  status?: "draft";
-  publishedAt?: number;
-  platformResults: Record<string, ResultEntry | undefined>;
-  rewrites: {
-    youtube: { title: string; description: string; tags: string[] };
-    linkedin: string;
-    x: string;
-    threads: string;
-    instagram: string;
-    tiktok: string;
-  };
+const STATUS_CHIP: Record<string, string> = {
+  posted: "bg-success/10 text-success",
+  uploading: "bg-accent-soft text-on-surface",
+  failed: "bg-error/10 text-error",
+  queued: "bg-muted text-on-surface-muted",
 };
 
-function StatusDots({ results, platforms }: { results: Record<string, ResultEntry | undefined>; platforms?: string[] }) {
-  const keys = (platforms?.length ? platforms : PLATFORM_ORDER) as string[];
+function StatusChip({ entry }: { entry: ResultEntry | undefined }) {
+  if (!entry) {
+    return (
+      <span className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-on-surface-subtle">
+        —
+      </span>
+    );
+  }
+  const cls = STATUS_CHIP[entry.status] ?? "bg-muted text-on-surface-muted";
   return (
-    <span className="flex items-center gap-1" aria-label="Platform statuses">
-      {keys.map((p) => {
-        const e = results[p];
-        const status = e?.status ?? (platforms?.includes(p) ? "queued" : "skipped");
-        const color =
-          status === "posted"
-            ? "bg-success"
-            : status === "uploading"
-              ? "bg-warning"
-              : status === "failed"
-                ? "bg-error"
-                : "bg-border";
-        const title = `${PLATFORM_LABELS[p] ?? p}: ${status}`;
-        return <span key={p} title={title} className={`size-2 rounded-full ${color}`} />;
-      })}
+    <span className={`rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] ${cls}`}>
+      {entry.status}
     </span>
   );
-}
-
-function captionFor(entry: HistoryEntry, platform: string): string {
-  if (platform === "youtube") {
-    const yt = entry.rewrites.youtube;
-    return [yt.title, yt.description, yt.tags.map((t) => `#${t.replace(/\s+/g, "")}`).join(" ")]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-  if (platform === "linkedin") return entry.rewrites.linkedin;
-  if (platform === "x") return entry.rewrites.x;
-  if (platform === "threads") return entry.rewrites.threads;
-  if (platform === "instagram") return entry.rewrites.instagram;
-  return entry.rewrites.tiktok;
 }
 
 function fmtDate(ts: number): string {
   return new Date(ts).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
-    hour: "numeric",
+    hour: "2-digit",
     minute: "2-digit",
   });
 }
 
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n).trimEnd()}…` : s;
+}
+
 export function PostHistory() {
-  const history = useQuery(api.posts.listHistory);
-  const discardDraft = useMutation(api.posts.discardDraft);
-  const [expanded, setExpanded] = useState<Id<"posts"> | null>(null);
-  const [discarding, setDiscarding] = useState<Id<"posts"> | null>(null);
+  const shipped = useQuery(api.posts.list);
+  const drafts = useQuery(api.posts.listDrafts);
+  const resumeDraft = useMutation(api.posts.resumeDraft);
+  const discardDraftMutation = useMutation(api.posts.discardDraft);
+  const [expandedId, setExpandedId] = useState<Id<"posts"> | null>(null);
 
-  const loading = history === undefined;
-  const shipped = history?.shipped ?? [];
-  const drafts = history?.drafts ?? [];
-
-  function handleDiscard(id: Id<"posts">) {
-    setDiscarding(id);
-    void discardDraft({ draftId: id }).finally(() => setDiscarding(null));
-  }
-
-  if (loading) {
-    return (
-      <div className="animate-pulse space-y-4 rounded-lg border border-border bg-surface-raised p-10">
-        <div className="h-6 w-48 rounded bg-muted" />
-        <div className="h-16 w-full rounded bg-muted" />
-        <div className="h-16 w-full rounded bg-muted" />
-      </div>
-    );
-  }
+  const loading = shipped === undefined || drafts === undefined;
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Drafts */}
-      {drafts.length > 0 && (
-        <section className="rounded-lg border border-dashed border-border bg-surface p-6" data-testid="history-drafts">
-          <p className="mb-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
-            Drafts
+    <div className="mx-auto flex max-w-4xl flex-col gap-8">
+      {/* ── Drafts ─────────────────────────────────────────────────────── */}
+      <section className="flex flex-col gap-4">
+        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
+          Drafts
+        </p>
+        {loading ? (
+          <Skeleton />
+        ) : (drafts ?? []).length === 0 ? (
+          <p className="font-sans text-[13px] leading-[1.5] text-on-surface-subtle">
+            No drafts. Save one from the composer and it lands here.
           </p>
-          <ul className="flex flex-col gap-3">
-            {drafts.map((d) => (
-              <li
-                key={d._id}
-                data-testid="history-draft-row"
-                className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface-raised px-4 py-3"
-              >
+        ) : (
+          <ul className="flex flex-col divide-y divide-border rounded-lg border border-border bg-surface-raised" data-testid="draft-list">
+            {(drafts ?? []).map((d) => (
+              <li key={d._id} className="flex items-center justify-between gap-3 px-4 py-3" data-testid="draft-row">
                 <div className="min-w-0">
                   <p className="truncate font-sans text-[14px] text-on-surface">
-                    {d.masterDescription || "(no description)"}
+                    {truncate(d.masterDescription, 90) || "Untitled draft"}
                   </p>
                   <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle">
-                    Saved {fmtDate(d._creationTime)}
+                    Saved {fmtDate(d.savedAt ?? d.createdAt)}
+                    {(d.platforms ?? []).length > 0
+                      ? ` · ${(d.platforms ?? []).length} platform${(d.platforms ?? []).length === 1 ? "" : "s"}`
+                      : ""}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleDiscard(d._id)}
-                  disabled={discarding === d._id}
-                  className="shrink-0 rounded-sm px-2 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle hover:bg-error/10 hover:text-error disabled:opacity-50"
-                >
-                  {discarding === d._id ? "…" : "Discard"}
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid={`resume-draft`}
+                    onClick={() => void resumeDraft({ draftId: d._id })}
+                    className="inline-flex h-8 items-center justify-center rounded-md border-2 border-border-strong bg-surface-raised px-3 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface transition-colors hover:bg-primary hover:text-primary-foreground"
+                  >
+                    Resume
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Discard draft"
+                    onClick={() => void discardDraftMutation({ draftId: d._id })}
+                    className="inline-flex h-8 items-center rounded-md px-2 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error"
+                  >
+                    Discard
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
-          <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle">
-            The latest draft auto-loads in the composer.
-          </p>
-        </section>
-      )}
+        )}
+      </section>
 
-      {/* Shipped */}
-      <section className="rounded-lg border border-border bg-surface p-6" data-testid="history-shipped">
-        <p className="mb-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
+      {/* ── Shipped ────────────────────────────────────────────────────── */}
+      <section className="flex flex-col gap-4">
+        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
           Shipped
         </p>
-
-        {shipped.length === 0 ? (
-          <div className="py-6">
-            <p className="font-sans text-[15px] text-on-surface">Nothing shipped yet.</p>
-            <p className="mt-2 font-sans text-[13px] text-on-surface-muted">
-              Your posts appear here the moment you ship.{" "}
-              <Link href="/compose" className="underline">
-                Compose one
-              </Link>
-              .
+        {loading ? (
+          <Skeleton />
+        ) : (shipped ?? []).length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border bg-surface-raised p-8 text-center">
+            <p className="font-sans text-[14px] font-medium text-on-surface">
+              Nothing shipped yet.
             </p>
+            <p className="mx-auto mt-2 max-w-[420px] font-sans text-[13px] leading-[1.5] text-on-surface-muted">
+              Your posted videos and their results show up here.
+            </p>
+            <Link
+              href="/compose"
+              className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-primary px-5 font-sans text-sm font-medium text-primary-foreground transition-colors hover:bg-accent hover:text-on-accent"
+            >
+              Compose one
+            </Link>
           </div>
         ) : (
-          <ul className="flex flex-col divide-y divide-border">
-            {shipped.map((entry) => {
-              const isOpen = expanded === entry._id;
-              const postedUrls = PLATFORM_ORDER.map((p) => ({
-                platform: p,
-                result: entry.platformResults[p],
-              })).filter(({ result }) => result?.status === "posted" && result.url);
-
+          <ul className="flex flex-col divide-y divide-border rounded-lg border border-border bg-surface-raised" data-testid="shipped-list">
+            {(shipped ?? []).map((post) => {
+              const expanded = expandedId === post._id;
+              const results = post.platformResults;
               return (
-                <li key={entry._id} data-testid="history-row" className="py-3">
+                <li key={post._id} data-testid="shipped-row">
                   <button
                     type="button"
-                    onClick={() => setExpanded(isOpen ? null : entry._id)}
-                    aria-expanded={isOpen}
-                    className="flex w-full items-center justify-between gap-3 text-left"
+                    onClick={() => setExpandedId(expanded ? null : post._id)}
+                    aria-expanded={expanded}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
                   >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-sans text-[14px] text-on-surface">
-                        {entry.masterDescription || "(no description)"}
+                    <div className="min-w-0">
+                      <p className="truncate font-sans text-[14px] text-on-surface">
+                        {truncate(post.masterDescription, 90) || "(no description)"}
+                      </p>
+                      <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle">
+                        {fmtDate(post.publishedAt ?? post.createdAt)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {(post.platforms ?? []).map((p) => (
+                        <StatusChip key={p} entry={results[p as keyof typeof results]} />
+                      ))}
+                      <span className="ml-1 font-mono text-[11px] text-on-surface-subtle">
+                        {expanded ? "−" : "+"}
                       </span>
-                      <span className="mt-0.5 block font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle">
-                        {fmtDate(entry.publishedAt ?? entry._creationTime)}
-                      </span>
-                    </span>
-                    <StatusDots results={entry.platformResults} platforms={entry.platforms} />
-                    <span className="shrink-0 font-mono text-[11px] text-on-surface-subtle">
-                      {isOpen ? "−" : "+"}
-                    </span>
+                    </div>
                   </button>
 
-                  {isOpen && (
-                    <div className="mt-3 flex flex-col gap-3 border-l-2 border-accent pl-4" data-testid="history-expanded">
-                      {/* Full captions per platform */}
-                      {PLATFORM_ORDER.filter((p) => captionFor(entry, p).trim().length > 0).map((p) => (
-                        <div key={p}>
-                          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-on-surface-muted">
-                            {PLATFORM_LABELS[p]}
-                          </p>
-                          <p className="mt-1 whitespace-pre-wrap font-sans text-[13px] leading-[1.5] text-on-surface">
-                            {captionFor(entry, p)}
-                          </p>
-                        </div>
+                  {expanded && (
+                    <div className="border-t border-border bg-surface px-4 py-4" data-testid="shipped-expanded">
+                      <CaptionBlock
+                        title="Master description"
+                        text={post.masterDescription}
+                      />
+                      <CaptionBlock
+                        title="YouTube"
+                        title2={post.rewrites.youtube.title}
+                        text={post.rewrites.youtube.description}
+                        tags={post.rewrites.youtube.tags}
+                      />
+                      {(
+                        [
+                          ["linkedin", post.rewrites.linkedin],
+                          ["x", post.rewrites.x],
+                          ["threads", post.rewrites.threads],
+                          ["instagram", post.rewrites.instagram],
+                          ["tiktok", post.rewrites.tiktok],
+                        ] as const
+                      ).map(([p, text]) => (
+                        <CaptionBlock key={p} title={PLATFORM_LABELS[p] ?? p} text={text} />
                       ))}
 
                       {/* Posted URLs */}
-                      {postedUrls.length > 0 && (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {postedUrls.map(({ platform, result }) => (
-                            <a
-                              key={platform}
-                              href={result!.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="rounded-md border border-border bg-surface-raised px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface hover:border-accent"
-                            >
-                              {PLATFORM_LABELS[platform]} ↗
-                            </a>
-                          ))}
+                      {Object.entries(results).some(([, e]) => e?.url) && (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {Object.entries(results)
+                            .filter(([, e]) => e?.url)
+                            .map(([p, e]) => (
+                              <a
+                                key={p}
+                                href={e!.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface transition-colors hover:border-border-strong"
+                              >
+                                {PLATFORM_LABELS[p] ?? p} ↗
+                              </a>
+                            ))}
                         </div>
                       )}
-
-                      {/* Per-platform errors */}
-                      {PLATFORM_ORDER.filter((p) => entry.platformResults[p]?.status === "failed").map((p) => (
-                        <p key={p} className="font-sans text-[12px] text-error">
-                          {PLATFORM_LABELS[p]}: {entry.platformResults[p]?.error ?? "failed"}
-                        </p>
-                      ))}
                     </div>
                   )}
                 </li>
@@ -248,6 +227,47 @@ export function PostHistory() {
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+function CaptionBlock({
+  title,
+  title2,
+  text,
+  tags,
+}: {
+  title: string;
+  title2?: string;
+  text?: string;
+  tags?: string[];
+}) {
+  if (!title2 && !text && (!tags || tags.length === 0)) return null;
+  return (
+    <div className="mb-4 last:mb-0">
+      <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-on-surface-muted">
+        {title}
+      </p>
+      {title2 ? (
+        <p className="mt-1 font-sans text-[14px] font-medium text-on-surface">{title2}</p>
+      ) : null}
+      {text ? (
+        <p className="mt-1 whitespace-pre-wrap font-sans text-[13px] leading-[1.5] text-on-surface-muted">
+          {text}
+        </p>
+      ) : null}
+      {tags && tags.length > 0 ? (
+        <p className="mt-1 font-mono text-[11px] text-on-surface-subtle">{tags.join(", ")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div className="animate-pulse space-y-3 rounded-lg border border-border bg-surface-raised p-6">
+      <div className="h-4 w-2/3 rounded bg-muted" />
+      <div className="h-4 w-1/2 rounded bg-muted" />
     </div>
   );
 }

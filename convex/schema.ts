@@ -119,6 +119,8 @@ export default defineSchema({
     publishedAt: v.optional(v.number()),
     /** TASK-056b: "draft" = saved work-in-progress (resumable). Absent = shipped row. */
     status: v.optional(v.literal("draft")),
+    /** TASK-056b: last save time — latestDraft sorts on this; resume bumps it. */
+    savedAt: v.optional(v.number()),
     /** Intended ship targets (founder-selected in composer). Optional for rows created before TASK-045b. */
     platforms: v.optional(v.array(v.string())),
     platformResults: v.object({

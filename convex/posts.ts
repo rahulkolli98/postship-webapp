@@ -376,7 +376,11 @@ const draftFieldsValidator = v.object({
   platforms: v.array(v.string()),
 });
 
-/** Most recent draft for the caller, or null. Hydrates the composer. */
+/**
+ * Most recent draft for the caller, or null. Hydrates the composer.
+ * TASK-059: sorts on savedAt (bumped by resumeDraft) falling back to
+ * createdAt — so resuming a draft from History makes it the working draft.
+ */
 export const latestDraft = query({
   args: {},
   handler: async (ctx) => {
@@ -391,8 +395,124 @@ export const latestDraft = query({
     return (
       rows
         .filter((r) => r.status === "draft")
-        .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null
+        .sort(
+          (a, b) => (b.savedAt ?? b.createdAt) - (a.savedAt ?? a.createdAt),
+        )[0] ?? null
     );
+  },
+});
+
+/**
+ * TASK-059: shipped posts for the History page — last 50, newest first,
+ * drafts excluded. Videos/storageIds deliberately excluded (metadata-only
+ * projection; expansion shows captions + result URLs, not media).
+ */
+export const list = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("posts"),
+      _creationTime: v.number(),
+      masterDescription: v.string(),
+      platforms: v.optional(v.array(v.string())),
+      platformResults: v.object({
+        youtube: v.optional(resultEntry),
+        linkedin: v.optional(resultEntry),
+        x: v.optional(resultEntry),
+        threads: v.optional(resultEntry),
+        instagram: v.optional(resultEntry),
+        tiktok: v.optional(resultEntry),
+      }),
+      rewrites: rewritesValidator,
+      publishedAt: v.optional(v.number()),
+      createdAt: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) return [];
+
+    const rows = await ctx.db
+      .query("posts")
+      .withIndex("by_userId_createdAt", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .take(50);
+
+    return rows
+      .filter((r) => r.status !== "draft")
+      .map((r) => ({
+        _id: r._id,
+        _creationTime: r._creationTime,
+        masterDescription: r.masterDescription,
+        platforms: r.platforms,
+        platformResults: r.platformResults,
+        rewrites: r.rewrites,
+        publishedAt: r.publishedAt,
+        createdAt: r.createdAt,
+      }));
+  },
+});
+
+/**
+ * TASK-059: all drafts for the History page's Drafts section, newest save
+ * first. Same metadata-only projection as `list` plus savedAt.
+ */
+export const listDrafts = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("posts"),
+      _creationTime: v.number(),
+      savedAt: v.optional(v.number()),
+      masterDescription: v.string(),
+      platforms: v.optional(v.array(v.string())),
+      createdAt: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) return [];
+
+    const rows = await ctx.db
+      .query("posts")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    return rows
+      .filter((r) => r.status === "draft")
+      .map(({ _id, _creationTime, savedAt, masterDescription, platforms, createdAt }) => ({
+        _id,
+        _creationTime,
+        savedAt,
+        masterDescription,
+        platforms,
+        createdAt,
+      }))
+      .sort(
+        (a, b) => (b.savedAt ?? b.createdAt) - (a.savedAt ?? a.createdAt),
+      );
+  },
+});
+
+/**
+ * TASK-059: bump a draft's savedAt so it becomes the composer's working
+ * draft (Resume from History). Auth + ownership + draft-status guarded.
+ */
+export const resumeDraft = mutation({
+  args: { draftId: v.id("posts") },
+  returns: v.null(),
+  handler: async (ctx, { draftId }) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) throw new Error("Not authenticated");
+
+    const post = await ctx.db.get(draftId);
+    if (post === null || post.userId !== user._id) {
+      throw new ConvexError("Draft not found.");
+    }
+    if (post.status !== "draft") return null;
+
+    await ctx.db.patch(draftId, { savedAt: Date.now() });
+    return null;
   },
 });
 
