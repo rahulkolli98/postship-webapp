@@ -21,7 +21,10 @@ export default defineApp({
     OPENAI_API_KEY: v.optional(v.string()),
     CLERK_JWT_ISSUER_DOMAIN: v.optional(v.string()),
     // Post for Me publishing backend (TASK-051/052). Founder creates the
-    // account at app.postforme.dev → API key.
+    // account at app.postforme.dev �+' API key.
     POSTFORME_API_KEY: v.optional(v.string()),
+    // TASK-056: shared secret PFM sends as the Post-For-Me-Webhook-Secret
+    // header — returned when the webhook is registered (register script).
+    POSTFORME_WEBHOOK_SECRET: v.optional(v.string()),
   },
 });

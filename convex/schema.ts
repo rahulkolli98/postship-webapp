@@ -123,6 +123,17 @@ export default defineSchema({
     savedAt: v.optional(v.number()),
     /** Intended ship targets (founder-selected in composer). Optional for rows created before TASK-045b. */
     platforms: v.optional(v.array(v.string())),
+    /**
+     * TASK-056: platform → Post for Me account id (sa_…) at ship time.
+     * Lets webhook results (keyed by sa_) map back to platforms even if
+     * the user reconnects accounts between ship and finalize.
+     */
+    pfmAccountMap: v.optional(v.record(v.string(), v.string())),
+    /**
+     * TASK-056 Phase A storage policy: when the post's video files were
+     * deleted from storage (delete-after-ship). Absent = media still held.
+     */
+    mediaDeletedAt: v.optional(v.number()),
     platformResults: v.object({
       youtube: v.optional(v.object(platformResult)),
       linkedin: v.optional(v.object(platformResult)),

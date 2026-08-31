@@ -1,4 +1,4 @@
-import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { ConvexError } from "convex/values";
 import { env } from "./_generated/server";
@@ -199,8 +199,11 @@ export const applyShipUpdate = internalMutation({
     postId: v.id("posts"),
     results: shipResultsValidator,
     markPublished: v.boolean(),
+    // TASK-056: stamp platform → sa_… so webhook results (keyed by sa_)
+    // map back to platforms even after the user reconnects accounts.
+    pfmAccountMap: v.optional(v.record(v.string(), v.string())),
   },
-  handler: async (ctx, { postId, results, markPublished }) => {
+  handler: async (ctx, { postId, results, markPublished, pfmAccountMap }) => {
     const post = await ctx.db.get(postId);
     if (post === null) return null;
 
@@ -213,6 +216,7 @@ export const applyShipUpdate = internalMutation({
     await ctx.db.patch(postId, {
       platformResults: merged,
       ...(markPublished ? { publishedAt: Date.now() } : {}),
+      ...(pfmAccountMap ? { pfmAccountMap } : {}),
     });
     return null;
   },
@@ -357,6 +361,10 @@ export const ship = action({
       postId,
       results: results as typeof shipResultsValidator.type,
       markPublished: true,
+      // TASK-056: platform → sa_… snapshot for webhook result mapping.
+      pfmAccountMap: Object.fromEntries(
+        targets.map((t) => [t.platform, t.socialAccountId]),
+      ),
     });
     await ctx.runMutation(internal.users.incrementTrialPosts, {
       userId: user._id,
@@ -544,6 +552,15 @@ export const updateDraft = mutation({
       throw new ConvexError("This post was already shipped.");
     }
 
+    // Phase A storage policy: videos removed during editing are purged
+    // immediately (storage ids are per-session uploads, never shared).
+    const nextIds = new Set(fields.videos.map((v) => String(v.storageId)));
+    for (const video of post.videos) {
+      if (!nextIds.has(String(video.storageId))) {
+        await ctx.storage.delete(video.storageId);
+      }
+    }
+
     await ctx.db.patch(draftId, {
       masterDescription: fields.masterDescription,
       videos: fields.videos,
@@ -557,7 +574,7 @@ export const updateDraft = mutation({
   },
 });
 
-/** Delete a draft row (user discard). Files remain for the 056 cron sweep. */
+/** Delete a draft row (user discard). Video files are purged with the row. */
 export const discardDraft = mutation({
   args: { draftId: v.id("posts") },
   returns: v.null(),
@@ -573,6 +590,11 @@ export const discardDraft = mutation({
     if (post === null || post.userId !== user._id) return null;
     if (post.status !== "draft") return null;
 
+    // Phase A storage policy: a discarded draft's files have no future
+    // reference — purge now so deleted rows don't orphan storage.
+    for (const video of post.videos) {
+      await ctx.storage.delete(video.storageId);
+    }
     await ctx.db.delete(draftId);
     return null;
   },
@@ -595,5 +617,401 @@ const historyEntryValidator = v.object({
     tiktok: v.optional(resultEntry),
   }),
   rewrites: rewritesValidator,
+});
+
+// ── Post for Me webhooks + storage lifecycle (TASK-056) ─────────────────
+//
+// Contract verified from vendor source (DayMoonDevelopment/post-for-me):
+//   Delivery: POST {our url}, header `Post-For-Me-Webhook-Secret: <whsec_>`,
+//   body {event_type, data}. PFM retries 8× with backoff and a 1s timeout
+//   per attempt — the Next route stays a thin forwarder and acks fast; all
+//   real work happens in Convex (secret check in the mutation, network in
+//   a scheduled action).
+//
+//   Event mapping (v1):
+//   - social.post.updated (status=processed) → the ONLY finalization
+//     trigger. Its data (SocialPostDto) carries id + external_id (= our
+//     posts._id) + status.
+//   - social.post.result.created → acked and ignored: SocialPostResultDto
+//     has NO external_id, so incremental events can't resolve our row.
+//     finalizeFromApi fetches the authoritative result set from
+//     GET /v1/social-post-results?post_id=… instead.
+//   - social.account.* → acked; account sync stays OAuth-callback-driven.
+//
+//   Merge policy: results are authoritative but never DOWNGRADE — only
+//   queued/uploading rows transition to posted/failed, so PFM's 8-retry
+//   redelivery is naturally idempotent.
+//
+//   Storage policy (founder-approved Phase A): delete-after-ship — media is
+//   purged immediately once every intended platform is posted; anything
+//   else waits for the daily sweep (48h expiry, retry window preserved).
+
+/** System-level row loader for webhook/sweep paths (no user auth). */
+export const getAnyPost = internalQuery({
+  args: { postId: v.id("posts") },
+  handler: async (ctx, { postId }) => ctx.db.get(postId),
+});
+
+const webhookAck = v.object({
+  ok: v.boolean(),
+  unauthorized: v.optional(v.boolean()),
+});
+
+/**
+ * Public webhook entry — the Next route forwards the raw event here. The
+ * PFM secret is checked against POSTFORME_WEBHOOK_SECRET (convex env), so
+ * the deployment URL alone is not enough to invoke this meaningfully.
+ */
+export const applyWebhookEvent = mutation({
+  args: {
+    secret: v.string(),
+    eventType: v.string(),
+    data: v.any(),
+  },
+  returns: webhookAck,
+  handler: async (ctx, { secret, eventType, data }): Promise<{ ok: boolean; unauthorized?: boolean }> => {
+    const expected = env.POSTFORME_WEBHOOK_SECRET;
+    if (!expected || secret !== expected) {
+      return { ok: false, unauthorized: true };
+    }
+
+    if (eventType === "social.post.updated") {
+      const d = (data ?? {}) as {
+        id?: unknown;
+        external_id?: unknown;
+        status?: unknown;
+      };
+      const externalId =
+        typeof d.external_id === "string" ? d.external_id : null;
+      const pfmPostId = typeof d.id === "string" ? d.id : null;
+      const status = typeof d.status === "string" ? d.status : null;
+
+      if (status === "processed" && externalId) {
+        // external_id IS our posts._id (set at ship). Guard against garbage
+        // shapes: malformed strings would fail the v.id() validator inside
+        // the scheduled query and spam retries — only pass plausible ids.
+        if (/^[a-z0-9]{16,64}$/.test(externalId)) {
+          await ctx.scheduler.runAfter(0, internal.posts.finalizeFromApi, {
+            postId: externalId as Id<"posts">,
+            ...(pfmPostId ? { pfmPostId } : {}),
+            postStatus: status,
+          });
+        } else {
+          console.error(
+            "[pfm-webhook] post.updated with unusable external_id:",
+            externalId.slice(0, 80),
+          );
+        }
+      }
+      return { ok: true };
+    }
+
+    // result.created / account.* / post.created / post.deleted: ack.
+    return { ok: true };
+  },
+});
+
+/** Merge webhook results (no-downgrade) and optionally purge shipped media. */
+export const applyWebhookMerge = internalMutation({
+  args: {
+    postId: v.id("posts"),
+    results: shipResultsValidator,
+    deleteMedia: v.boolean(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { postId, results, deleteMedia }) => {
+    const post = await ctx.db.get(postId);
+    if (post === null) return null;
+
+    type WidenEntry = { status: string; url?: string; error?: string; postedAt?: number };
+    const current = post.platformResults as Record<string, WidenEntry | undefined>;
+    const incoming = results as Record<string, WidenEntry | undefined>;
+    const merged = { ...post.platformResults } as Record<string, WidenEntry | undefined>;
+    let changed = false;
+    for (const key of PLATFORM_KEYS) {
+      const next = incoming[key];
+      const prev = current[key];
+      if (!next) continue;
+      // Never downgrade a terminal state (PFM retries redeliver events).
+      if (prev && (prev.status === "posted" || prev.status === "failed")) {
+        continue;
+      }
+      if (!prev || prev.status !== next.status || prev.url !== next.url) {
+        merged[key] = next;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await ctx.db.patch(postId, {
+        platformResults: merged as typeof post.platformResults,
+      });
+    }
+
+    if (deleteMedia && post.mediaDeletedAt === undefined && post.videos.length > 0) {
+      // Storage ids are per-upload and never shared across posts (composer
+      // uploads are per-session), so deleting here cannot break other rows.
+      for (const video of post.videos) {
+        await ctx.storage.delete(video.storageId);
+      }
+      await ctx.db.patch(postId, {
+        videos: [],
+        mediaDeletedAt: Date.now(),
+      });
+    }
+    return null;
+  },
+});
+
+/**
+ * Authoritative finalization: fetch per-account results from the PFM API
+ * and merge truth into platformResults. Triggered by post.updated(processed)
+ * and by the daily sweep for posts stuck in uploading (missed webhooks).
+ */
+export const finalizeFromApi = internalAction({
+  args: {
+    postId: v.id("posts"),
+    pfmPostId: v.optional(v.string()),
+    postStatus: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { postId, pfmPostId, postStatus }) => {
+    const post = await ctx.runQuery(internal.posts.getAnyPost, { postId });
+    if (post === null) return null;
+    if (post.status === "draft" || !post.publishedAt) return null;
+
+    const apiKey = env.POSTFORME_API_KEY;
+    if (!apiKey) {
+      console.error("[pfm-finalize] POSTFORME_API_KEY not set; cannot reconcile");
+      return null;
+    }
+    // Same live base as the publishing client (/v1 prefix required).
+    const baseUrl = "https://api.postforme.dev/v1";
+    const headers = { Authorization: `Bearer ${apiKey}` };
+
+    // Resolve the provider post id: webhooks supply it directly; the sweep
+    // path resolves via external_id (verified supported on GET /social-posts).
+    let providerPostId = pfmPostId ?? null;
+    let providerStatus = postStatus ?? null;
+    if (!providerPostId || !providerStatus) {
+      try {
+        const res = await fetch(
+          `${baseUrl}/social-posts?external_id=${encodeURIComponent(String(post._id))}`,
+          { headers },
+        );
+        if (!res.ok) {
+          console.error("[pfm-finalize] social-posts lookup failed:", res.status);
+          return null;
+        }
+        const payload = (await res.json()) as
+          | { data?: Array<{ id?: string; status?: string }> }
+          | Array<{ id?: string; status?: string }>;
+        const rows = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.data)
+            ? payload.data
+            : [];
+        providerPostId = providerPostId ?? rows[0]?.id ?? null;
+        providerStatus = providerStatus ?? rows[0]?.status ?? null;
+      } catch (err) {
+        console.error("[pfm-finalize] social-posts lookup errored:", err);
+        return null;
+      }
+    }
+    if (!providerPostId) {
+      console.warn("[pfm-finalize] no provider post id; skipping", String(post._id));
+      return null;
+    }
+
+    // Authoritative per-account results.
+    let resultRows: Array<{
+      social_account_id?: unknown;
+      success?: unknown;
+      error?: unknown;
+      platform_data?: { url?: unknown } | null;
+    }> = [];
+    try {
+      const res = await fetch(
+        `${baseUrl}/social-post-results?post_id=${encodeURIComponent(providerPostId)}`,
+        { headers },
+      );
+      if (!res.ok) {
+        console.error("[pfm-finalize] results fetch failed:", res.status);
+        return null;
+      }
+      const payload = (await res.json()) as
+        | { data?: unknown[] }
+        | unknown[];
+      resultRows = (
+        Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : []
+      ) as typeof resultRows;
+    } catch (err) {
+      console.error("[pfm-finalize] results fetch errored:", err);
+      return null;
+    }
+
+    // Map sa_ → platform via the ship-time snapshot.
+    const accountMap = post.pfmAccountMap ?? {};
+    const current = post.platformResults as Record<
+      string,
+      { status: string } | undefined
+    >;
+    const updates: Record<
+      string,
+      { status: "posted" | "failed"; url?: string; error?: string; postedAt?: number }
+    > = {};
+    const reportedAccounts = new Set<string>();
+    for (const row of resultRows) {
+      const sa = typeof row.social_account_id === "string" ? row.social_account_id : null;
+      if (!sa) continue;
+      reportedAccounts.add(sa);
+      const platform = accountMap[sa];
+      if (!platform || !(PLATFORM_KEYS as readonly string[]).includes(platform)) continue;
+      const prev = current[platform];
+      if (prev && (prev.status === "posted" || prev.status === "failed")) continue;
+      const resultUrl =
+        row.platform_data && typeof row.platform_data.url === "string"
+          ? row.platform_data.url
+          : undefined;
+      updates[platform] =
+        row.success === true
+          ? { status: "posted", ...(resultUrl ? { url: resultUrl } : {}), postedAt: Date.now() }
+          : {
+              status: "failed",
+              error:
+                typeof row.error === "string" && row.error.trim().length > 0
+                  ? row.error
+                  : "Publishing failed.",
+            };
+    }
+
+    // Honesty fallback (founder transparency rule): once PFM reports the post
+    // processed, any intended platform still pending without a result has no
+    // recoverable outcome — mark it failed rather than leave a fake spinner.
+    if (providerStatus === "processed") {
+      const intended: string[] = post.platforms ?? [...PLATFORM_KEYS];
+      for (const platform of intended) {
+        if (updates[platform]) continue;
+        const prev = current[platform];
+        if (prev && (prev.status === "posted" || prev.status === "failed")) continue;
+        const sa = Object.entries(accountMap).find(([, p]) => p === platform)?.[0];
+        if (!sa || !reportedAccounts.has(sa)) {
+          updates[platform] = {
+            status: "failed",
+            error: "Publishing outcome unavailable — connection changed during publishing. Reconnect and retry.",
+          };
+        }
+      }
+    }
+
+    // Storage policy: purge media only when EVERY intended platform posted
+    // (failed platforms keep their media for TASK-055 retry; the 48h sweep
+    // is the backstop for anything unretried).
+    const intendedAll: string[] = post.platforms ?? [...PLATFORM_KEYS];
+    const allPosted = intendedAll.every((p) => {
+      const status = updates[p]?.status ?? current[p]?.status;
+      return status === "posted";
+    });
+    const deleteMedia =
+      allPosted && post.mediaDeletedAt === undefined && post.videos.length > 0;
+
+    await ctx.runMutation(internal.posts.applyWebhookMerge, {
+      postId,
+      results: updates as typeof shipResultsValidator.type,
+      deleteMedia,
+    });
+    return null;
+  },
+});
+
+// ── Daily sweep (crons.ts schedules this) ────────────────────────────────
+
+/** Two sweep candidate sets: stuck-uploading (reconcile) + stale media (purge). */
+export const sweepCandidates = internalQuery({
+  args: { staleBefore: v.number(), stuckBefore: v.number() },
+  returns: v.object({
+    stale: v.array(v.id("posts")),
+    stuck: v.array(v.id("posts")),
+  }),
+  handler: async (ctx, { staleBefore, stuckBefore }) => {
+    const stale: Id<"posts">[] = [];
+    const stuck: Id<"posts">[] = [];
+    let cursor: string | null = null;
+    for (;;) {
+      const page = await ctx.db.query("posts").paginate({
+        numItems: 100,
+        cursor,
+      });
+      for (const p of page.page) {
+        if (p.status === "draft" || !p.publishedAt || p.mediaDeletedAt !== undefined) {
+          continue;
+        }
+        if (p.publishedAt < staleBefore) {
+          stale.push(p._id);
+          continue;
+        }
+        if (p.publishedAt < stuckBefore) {
+          const results = p.platformResults as Record<
+            string,
+            { status?: string } | undefined
+          >;
+          const intended: string[] = p.platforms ?? [...PLATFORM_KEYS];
+          const hasPending = intended.some((k) => {
+            const r = results[k];
+            return !r || r.status === "queued" || r.status === "uploading";
+          });
+          if (hasPending) stuck.push(p._id);
+        }
+      }
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    return { stale, stuck };
+  },
+});
+
+/**
+ * Daily maintenance: (1) re-finalize posts stuck in uploading for >30min
+ * (missed webhooks — idempotent via no-downgrade merge), (2) purge media
+ * from shipped posts older than 48h regardless of outcome (retry window
+ * closed; founder-approved Phase A lifecycle).
+ */
+export const sweepMedia = internalAction({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const now = Date.now();
+    const { stale, stuck } = await ctx.runQuery(internal.posts.sweepCandidates, {
+      staleBefore: now - 48 * 60 * 60 * 1000,
+      stuckBefore: now - 30 * 60 * 1000,
+    });
+
+    for (const postId of stuck) {
+      await ctx.scheduler.runAfter(0, internal.posts.finalizeFromApi, { postId });
+    }
+    for (const postId of stale) {
+      await ctx.runMutation(internal.posts.purgePostMedia, { postId });
+    }
+    if (stuck.length > 0 || stale.length > 0) {
+      console.log(
+        `[pfm-sweep] reconciled ${stuck.length} stuck, purged ${stale.length} stale`,
+      );
+    }
+    return null;
+  },
+});
+
+/** Delete a shipped post's video files + flag the row (48h expiry path). */
+export const purgePostMedia = internalMutation({
+  args: { postId: v.id("posts") },
+  returns: v.null(),
+  handler: async (ctx, { postId }) => {
+    const post = await ctx.db.get(postId);
+    if (post === null || post.mediaDeletedAt !== undefined) return null;
+    for (const video of post.videos) {
+      await ctx.storage.delete(video.storageId);
+    }
+    await ctx.db.patch(postId, { videos: [], mediaDeletedAt: Date.now() });
+    return null;
+  },
 });
 

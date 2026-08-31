@@ -36,6 +36,7 @@ type Env = {
   readonly OPENROUTER_API_KEY: string | undefined;
   readonly OPENROUTER_MODEL: string | undefined;
   readonly POSTFORME_API_KEY: string | undefined;
+  readonly POSTFORME_WEBHOOK_SECRET: string | undefined;
 };
 
 /**
