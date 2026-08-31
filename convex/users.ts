@@ -75,7 +75,7 @@ export const getByClerkId = internalQuery({
       ),
       subscriptionTier: v.optional(v.union(v.literal("creator"), v.literal("pro"))),
       subscriptionPeriodEnd: v.optional(v.number()),
-      revenuecatCustomerId: v.optional(v.string()),
+      paddleCustomerId: v.optional(v.string()),
       trialStartedAt: v.optional(v.number()),
       trialPostsUsed: v.optional(v.number()),
     }),

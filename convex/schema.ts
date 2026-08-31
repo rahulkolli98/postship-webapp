@@ -30,7 +30,7 @@ export default defineSchema({
     displayName: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
     createdAt: v.number(), // Unix timestamp
-    // Subscription state (RevenueCat writes these later, TASK-063/064)
+    // Subscription state (Paddle webhook writes these later, TASK-063/064)
     subscriptionStatus: v.union(
       v.literal("trial"),
       v.literal("active"),
@@ -39,7 +39,7 @@ export default defineSchema({
     ),
     subscriptionTier: v.optional(v.union(v.literal("creator"), v.literal("pro"))),
     subscriptionPeriodEnd: v.optional(v.number()),
-    revenuecatCustomerId: v.optional(v.string()),
+    paddleCustomerId: v.optional(v.string()),
     // Trial tracking (7 days / 5 posts lifetime)
     trialStartedAt: v.optional(v.number()),
     trialPostsUsed: v.optional(v.number()),
