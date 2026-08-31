@@ -127,6 +127,7 @@ function ComposerCanvas() {
   const updateDraft = useMutation(api.posts.updateDraft);
   const discardDraftMutation = useMutation(api.posts.discardDraft);
   const shipPost = useAction(api.posts.ship);
+  const retryPostPlatform = useAction(api.posts.retryPlatform);
   const [masterDescription, setMasterDescription] = useState("");
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -152,6 +153,12 @@ function ComposerCanvas() {
   const [shipping, setShipping] = useState(false);
   const [shipError, setShipError] = useState<{ text: string; connect?: boolean; upgrade?: boolean } | null>(null);
   const [shipResults, setShipResults] = useState<PublishResult | null>(null);
+  const [shippedPostId, setShippedPostId] = useState<Id<"posts"> | null>(null);
+  const [retryingPlatform, setRetryingPlatform] = useState<Platform | null>(null);
+  const livePostStatus = useQuery(
+    api.posts.status,
+    shippedPostId ? { postId: shippedPostId } : "skip",
+  );
   // TASK-056b: hydrated draft videos → passed into VideoUploader once.
   const hydratedRef = useRef(false);
   // TASK-045b: founder-selected ship targets. TASK-054b: default to
@@ -263,6 +270,8 @@ function ComposerCanvas() {
     setPairings({});
     setOverrides(new Set());
     setShipResults(null);
+    setShippedPostId(null);
+    setRetryingPlatform(null);
     selectionHydrated.current = false;
     setDraftFiles(null);
   }
@@ -434,6 +443,7 @@ function ComposerCanvas() {
       }
 
       const res = await shipPost({ postId });
+      setShippedPostId(postId);
       setShipResults(res.results);
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
@@ -466,6 +476,53 @@ function ComposerCanvas() {
       setShipping(false);
     }
   }
+
+  async function handleRetry(platform: Platform) {
+    if (!shippedPostId || retryingPlatform) return;
+    setRetryingPlatform(platform);
+    setShipError(null);
+    setShipResults((previous) =>
+      previous
+        ? { ...previous, [platform]: { status: "uploading" } }
+        : previous,
+    );
+    try {
+      const response = await retryPostPlatform({
+        postId: shippedPostId,
+        platform,
+      });
+      setShipResults((previous) =>
+        previous
+          ? { ...previous, [platform]: response.result }
+          : { [platform]: response.result },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setShipResults((previous) =>
+        previous
+          ? {
+              ...previous,
+              [platform]: {
+                status: "failed",
+                error: message || "Retry failed. Try again.",
+              },
+            }
+          : previous,
+      );
+    } finally {
+      setRetryingPlatform(null);
+    }
+  }
+
+  const liveResults = livePostStatus
+    ? Object.fromEntries(
+        ((livePostStatus.platforms ?? ALL_PLATFORMS) as Platform[]).flatMap((platform) => {
+          const result = livePostStatus.platformResults[platform];
+          return result ? [[platform, result]] : [];
+        }),
+      )
+    : null;
+  const displayedShipResults = liveResults ?? shipResults;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -615,7 +672,13 @@ function ComposerCanvas() {
                 )}
               </p>
             )}
-            {shipResults && <PublishProgress results={shipResults} />}
+            {displayedShipResults && (
+              <PublishProgress
+                results={displayedShipResults}
+                onRetry={handleRetry}
+                retrying={retryingPlatform}
+              />
+            )}
 
             {hasConnections ? (
               <ConnectedState connected={connected} />

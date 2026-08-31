@@ -9,7 +9,7 @@ import { PLATFORM } from "./accounts";
 import { getCurrentUser } from "./users";
 import { publish } from "../src/lib/publishing";
 import { createPostForMeClient } from "../src/lib/publishing/postforme";
-import type { PublishResult } from "../src/lib/publishing/types";
+import type { Platform, PublishResult } from "../src/lib/publishing/types";
 
 /**
  * posts.create — TASK-049 (PRD § 4).
@@ -371,6 +371,157 @@ export const ship = action({
     });
 
     return { postId, results };
+  },
+});
+
+/**
+ * Retry one failed platform without charging another trial post.
+ *
+ * The original posts._id is reused as PFM's external_id, so a retry remains
+ * idempotent at the provider boundary. Final status still arrives through
+ * the TASK-056 webhook path.
+ */
+export const retryPlatform = action({
+  args: {
+    postId: v.id("posts"),
+    platform: v.union(
+      v.literal("youtube"),
+      v.literal("linkedin"),
+      v.literal("x"),
+      v.literal("threads"),
+      v.literal("instagram"),
+      v.literal("tiktok"),
+    ),
+  },
+  returns: v.object({
+    platform: v.string(),
+    result: resultEntry,
+  }),
+  handler: async (ctx, { postId, platform }): Promise<{
+    platform: string;
+    result: {
+      status: "queued" | "uploading" | "posted" | "failed";
+      url?: string;
+      error?: string;
+      postedAt?: number;
+    };
+  }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) throw new Error("Not authenticated");
+    const user = await ctx.runQuery(internal.users.getByClerkId, {
+      clerkUserId: identity.subject,
+    });
+    if (user === null) throw new Error("Not authenticated");
+
+    const post = await ctx.runQuery(internal.posts.getOwned, {
+      postId,
+      userId: user._id,
+    });
+    if (post === null || post.status === "draft") {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Post not found." });
+    }
+
+    const current = post.platformResults[platform];
+    if (!current || current.status !== "failed") {
+      throw new ConvexError({
+        code: "RETRY_NOT_ALLOWED",
+        message: "Only failed platforms can be retried.",
+      });
+    }
+
+    const account = (await ctx.runQuery(internal.accounts.listInternal, {
+      userId: user._id,
+    })).find((row) => row.platform === platform && row.platformUserId);
+    if (!account) {
+      throw new ConvexError({
+        code: "NO_CONNECTIONS",
+        message: `Reconnect ${platform} before retrying.`,
+      });
+    }
+
+    const storageId = post.pairings[platform];
+    const video = post.videos.find((item) => String(item.storageId) === storageId);
+    if (!storageId || !video) {
+      throw new ConvexError({
+        code: "MEDIA_MISSING",
+        message: "The paired video is no longer attached. Re-upload and try again.",
+      });
+    }
+    const url = await ctx.storage.getUrl(video.storageId);
+    if (!url) {
+      throw new ConvexError({
+        code: "MEDIA_MISSING",
+        message: `Stored video "${video.filename}" is no longer retrievable. Re-upload and try again.`,
+      });
+    }
+
+    const apiKey = env.POSTFORME_API_KEY ?? null;
+    if (!apiKey) {
+      throw new ConvexError({
+        code: "PUBLISHING_NOT_CONFIGURED",
+        message: "Publishing backend not configured. Set POSTFORME_API_KEY.",
+      });
+    }
+
+    const target = {
+      platform: platform as Platform,
+      socialAccountId: account.platformUserId,
+      caption:
+        platform === "youtube"
+          ? ""
+          : (post.rewrites[platform as Exclude<Platform, "youtube">] ?? ""),
+      media: [{
+        url,
+        filename: video.filename,
+        aspectRatio: video.aspectRatio,
+      }],
+    };
+    const client = createPostForMeClient(apiKey);
+    const results = await publish(client, {
+      masterDescription: post.masterDescription,
+      captions: post.rewrites,
+      media: target.media,
+      targets: [target],
+      youtube: platform === "youtube" ? post.rewrites.youtube : undefined,
+      externalId: String(post._id),
+    });
+    const result = results[platform] ?? {
+      status: "failed" as const,
+      error: "Publishing backend returned no result.",
+    };
+
+    await ctx.runMutation(internal.posts.applyShipUpdate, {
+      postId,
+      results: { [platform]: result },
+      markPublished: false,
+      pfmAccountMap: { [platform]: account.platformUserId },
+    });
+
+    return { platform, result };
+  },
+});
+
+/** Live status projection for the current user's shipped post. */
+export const status = query({
+  args: { postId: v.id("posts") },
+  returns: v.union(
+    v.object({
+      platforms: v.optional(v.array(v.string())),
+      platformResults: shipResultsValidator,
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, { postId }) => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) return null;
+    const post = await ctx.db.get(postId);
+    if (post === null || post.userId !== user._id || post.status === "draft") {
+      return null;
+    }
+    return {
+      platforms: post.platforms,
+      platformResults: post.platformResults,
+    };
   },
 });
 

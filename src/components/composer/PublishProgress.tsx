@@ -1,6 +1,10 @@
 "use client";
 
-import { PLATFORMS, type PublishResult } from "../../../src/lib/publishing/types";
+import {
+  PLATFORMS,
+  type Platform,
+  type PublishResult,
+} from "../../../src/lib/publishing/types";
 
 /**
  * PublishProgress — TASK-054.
@@ -60,7 +64,15 @@ function StatusChip({ entry }: { entry: ResultEntry }) {
   );
 }
 
-export function PublishProgress({ results }: { results: PublishResult }) {
+export function PublishProgress({
+  results,
+  onRetry,
+  retrying,
+}: {
+  results: PublishResult;
+  onRetry?: (platform: Platform) => void;
+  retrying?: Platform | null;
+}) {
   const entries = PLATFORMS.flatMap((p) => {
     const e = results[p];
     return e ? [[p, e] as const] : [];
@@ -93,6 +105,17 @@ export function PublishProgress({ results }: { results: PublishResult }) {
                 <span className="font-sans text-[12px] text-error">{entry.error}</span>
               ) : null}
               <StatusChip entry={entry} />
+              {entry.status === "failed" && onRetry ? (
+                <button
+                  type="button"
+                  onClick={() => onRetry(platform as Platform)}
+                  disabled={retrying === platform}
+                  data-testid={`retry-${platform}`}
+                  className="rounded-sm border border-border-strong px-2 py-1 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-on-surface transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {retrying === platform ? "Retrying…" : "Retry"}
+                </button>
+              ) : null}
             </span>
           </li>
         ))}

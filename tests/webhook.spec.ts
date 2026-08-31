@@ -33,3 +33,23 @@ test("webhook rejects invalid signature", async ({ request }) => {
   const body = await res.json();
   expect(body.ok).toBe(false);
 });
+
+test("Post for Me webhook rejects a missing event type", async ({ request }) => {
+  const res = await request.post("/api/webhooks/postforme", {
+    headers: { "Post-For-Me-Webhook-Secret": "wrong" },
+    data: { data: {} },
+  });
+  expect(res.status()).toBe(400);
+  const body = await res.json();
+  expect(body.ok).toBe(false);
+});
+
+test("Post for Me webhook rejects an incorrect secret", async ({ request }) => {
+  const res = await request.post("/api/webhooks/postforme", {
+    headers: { "Post-For-Me-Webhook-Secret": "wrong" },
+    data: { event_type: "social.post.updated", data: {} },
+  });
+  expect(res.status()).toBe(401);
+  const body = await res.json();
+  expect(body.ok).toBe(false);
+});
