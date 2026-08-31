@@ -53,3 +53,34 @@ test("Post for Me webhook rejects an incorrect secret", async ({ request }) => {
   const body = await res.json();
   expect(body.ok).toBe(false);
 });
+
+test("Paddle webhook rejects a missing signature", async ({ request }) => {
+  const res = await request.post("/api/webhooks/paddle", {
+    data: { event_type: "subscription.created", data: {} },
+  });
+  expect(res.status()).toBe(401);
+  const body = await res.json();
+  expect(body.ok).toBe(false);
+});
+
+test("Paddle webhook rejects a malformed signature", async ({ request }) => {
+  const res = await request.post("/api/webhooks/paddle", {
+    headers: { "Paddle-Signature": "ts=1700000000;h1=tooshort" },
+    data: { event_type: "subscription.created", data: {} },
+  });
+  expect(res.status()).toBe(401);
+  const body = await res.json();
+  expect(body.ok).toBe(false);
+});
+
+test("Paddle webhook rejects a stale timestamp", async ({ request }) => {
+  const res = await request.post("/api/webhooks/paddle", {
+    headers: {
+      "Paddle-Signature": `ts=1000000000;h1=${"a".repeat(64)}`,
+    },
+    data: { event_type: "subscription.created", data: {} },
+  });
+  expect(res.status()).toBe(401);
+  const body = await res.json();
+  expect(body.ok).toBe(false);
+});

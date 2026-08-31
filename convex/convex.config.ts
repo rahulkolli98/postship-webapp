@@ -26,5 +26,12 @@ export default defineApp({
     // TASK-056: shared secret PFM sends as the Post-For-Me-Webhook-Secret
     // header — returned when the webhook is registered (register script).
     POSTFORME_WEBHOOK_SECRET: v.optional(v.string()),
+    // TASK-063/064: Paddle Billing webhook. The secret comes from the
+    // notification destination (founder creates it in the dashboard — it
+    // shows ONCE); the price IDs are PUBLIC identifiers (pri_…) used to
+    // derive the subscription tier server-authoritatively.
+    PADDLE_WEBHOOK_SECRET: v.optional(v.string()),
+    PADDLE_PRICE_CREATOR: v.optional(v.string()),
+    PADDLE_PRICE_PRO: v.optional(v.string()),
   },
 });

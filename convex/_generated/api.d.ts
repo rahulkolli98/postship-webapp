@@ -13,6 +13,7 @@ import type * as accounts from "../accounts.js";
 import type * as crons from "../crons.js";
 import type * as posts from "../posts.js";
 import type * as rewrites from "../rewrites.js";
+import type * as subscriptions from "../subscriptions.js";
 import type * as uploads from "../uploads.js";
 import type * as users from "../users.js";
 
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   posts: typeof posts;
   rewrites: typeof rewrites;
+  subscriptions: typeof subscriptions;
   uploads: typeof uploads;
   users: typeof users;
 }>;
