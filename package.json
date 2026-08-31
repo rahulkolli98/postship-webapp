@@ -20,6 +20,7 @@
     "@clerk/nextjs": "^7.8.0",
     "@clerk/ui": "^1.30.6",
     "@opennextjs/cloudflare": "^1.20.3",
+    "@paddle/paddle-js": "^1.6.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.45.0",
