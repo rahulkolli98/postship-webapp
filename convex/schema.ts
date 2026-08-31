@@ -124,7 +124,7 @@ export default defineSchema({
     /** Intended ship targets (founder-selected in composer). Optional for rows created before TASK-045b. */
     platforms: v.optional(v.array(v.string())),
     /**
-     * TASK-056: platform → Post for Me account id (sa_…) at ship time.
+     * TASK-056: Post for Me account id (sa_…) → platform at ship time.
      * Lets webhook results (keyed by sa_) map back to platforms even if
      * the user reconnects accounts between ship and finalize.
      */

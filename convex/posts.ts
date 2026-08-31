@@ -361,9 +361,9 @@ export const ship = action({
       postId,
       results: results as typeof shipResultsValidator.type,
       markPublished: true,
-      // TASK-056: platform → sa_… snapshot for webhook result mapping.
+    // TASK-056: sa_… → platform snapshot for webhook result mapping.
       pfmAccountMap: Object.fromEntries(
-        targets.map((t) => [t.platform, t.socialAccountId]),
+        targets.map((t) => [t.socialAccountId, t.platform]),
       ),
     });
     await ctx.runMutation(internal.users.incrementTrialPosts, {
@@ -494,7 +494,7 @@ export const retryPlatform = action({
       postId,
       results: { [platform]: result },
       markPublished: false,
-      pfmAccountMap: { [platform]: account.platformUserId },
+      pfmAccountMap: { [account.platformUserId]: platform },
     });
 
     return { platform, result };
