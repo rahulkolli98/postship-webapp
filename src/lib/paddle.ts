@@ -49,6 +49,48 @@ export function getPaddle(): Paddle | null {
 }
 
 /**
+ * Open the Paddle overlay checkout for one tier — TASK-062.
+ *
+ * Contract from the official checkout-web skill: overlay is the default
+ * display mode; `variant: "one-page"` is the recommended flow; `successUrl`
+ * returns the user to the billing page AFTER payment (the webhook is the
+ * provisioning source of truth — never the redirect); `customData` rides on
+ * the transaction/subscription so the TASK-063 webhook can resolve our user
+ * (`clerkUserId`).
+ *
+ * Resolves false when Paddle is unconfigured/failed (graceful "billing
+ * unavailable" in the UI) — never throws into the caller.
+ */
+export async function startCheckout(args: {
+  priceId: string;
+  email?: string;
+  clerkUserId?: string;
+}): Promise<boolean> {
+  const initialized = await initPaddle();
+  if (!initialized) return false;
+  const paddle = paddleInstance;
+  if (paddle === null) return false;
+
+  try {
+    paddle.Checkout.open({
+      items: [{ priceId: args.priceId, quantity: 1 }],
+      ...(args.email ? { customer: { email: args.email } } : {}),
+      ...(args.clerkUserId
+        ? { customData: { clerkUserId: args.clerkUserId } }
+        : {}),
+      settings: {
+        variant: "one-page",
+        successUrl: "/settings/billing?upgraded=1",
+      },
+    });
+    return true;
+  } catch (err) {
+    console.error("[paddle] checkout open failed:", err);
+    return false;
+  }
+}
+
+/**
  * Initialize Paddle.js once per session. Safe to call repeatedly; later
  * calls await the same shared attempt. Resolves false when unconfigured
  * (no token / non-browser) or when initialization failed — it never throws

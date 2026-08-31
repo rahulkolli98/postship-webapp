@@ -25,17 +25,18 @@ export default function SettingsPage() {
               Connect or disconnect your publishing platforms via Post for Me.
             </p>
           </Link>
-          <div
-            aria-disabled
-            className="rounded-lg border border-dashed border-border p-6 opacity-60"
+          <Link
+            href="/settings/billing"
+            data-testid="settings-card-billing"
+            className="rounded-lg border border-border bg-surface p-6 transition-colors hover:border-border-strong"
           >
             <h2 className="font-sans text-[17px] font-semibold text-on-surface">
               Billing
             </h2>
             <p className="mt-2 font-sans text-[13px] leading-[1.5] text-on-surface-muted">
-              Plan management arrives with Phase 3.
+              Upgrade to Creator or Pro — checkout via Paddle.
             </p>
-          </div>
+          </Link>
         </div>
       </div>
     </div>
