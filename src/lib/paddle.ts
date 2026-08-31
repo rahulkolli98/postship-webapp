@@ -80,7 +80,11 @@ export async function startCheckout(args: {
         : {}),
       settings: {
         variant: "one-page",
-        successUrl: "/settings/billing?upgraded=1",
+        // Paddle validates successUrl as an ABSOLUTE http(s):// URL — a
+        // relative path fails Checkout input validation (founder-hit bug,
+        // 2026-08-31). startCheckout only runs in the browser, so
+        // window.location.origin is always available here.
+        successUrl: `${window.location.origin}/settings/billing?upgraded=1`,
       },
     });
     return true;
