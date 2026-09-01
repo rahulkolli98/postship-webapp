@@ -174,3 +174,26 @@ export const resetTrialPosts = internalMutation({
     return null;
   },
 });
+
+/**
+ * TASK-066 test lever: set a user's trialStartedAt to an arbitrary
+ * timestamp (e.g. 8 days ago to verify TRIAL_EXPIRED, or now to re-open a
+ * trial for counter testing). Internal-only (no client reach); run via the
+ * Convex dashboard function runner with {"clerkUserId":"user_…",
+ * "startedAt":<unix ms>}.
+ */
+export const devSetTrialStartedAt = internalMutation({
+  args: { clerkUserId: v.string(), startedAt: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { clerkUserId, startedAt }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique();
+    if (user === null) {
+      throw new Error(`Unknown clerkUserId: ${clerkUserId.slice(0, 12)}…`);
+    }
+    await ctx.db.patch(user._id, { trialStartedAt: startedAt });
+    return null;
+  },
+});
