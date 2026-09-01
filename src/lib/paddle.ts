@@ -103,7 +103,15 @@ export async function startCheckout(args: {
 export function initPaddle(): Promise<boolean> {
   if (paddleInstance !== null) return Promise.resolve(true);
   if (initPromise) return initPromise;
-  if (!CLIENT_TOKEN || typeof window === "undefined") {
+  if (typeof window === "undefined") {
+    return Promise.resolve(false); // SSR/prerender — no-op by design
+  }
+  if (!CLIENT_TOKEN) {
+    // Distinct, greppable signal: the BUILD didn't include the token
+    // (dashboard build variables missing/misplaced) — not a runtime error.
+    console.warn(
+      "[paddle] NEXT_PUBLIC_PADDLE_CLIENT_TOKEN missing from this build — billing disabled. Check the deployment's BUILD environment variables.",
+    );
     return Promise.resolve(false);
   }
 

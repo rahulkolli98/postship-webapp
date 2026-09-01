@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useConvexAuth } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { initPaddle, startCheckout } from "../../lib/paddle";
 
@@ -57,6 +57,7 @@ function planLabel(
 export function BillingPortal() {
   const { isSignedIn, user } = useUser();
   const searchParams = useSearchParams();
+  const convexAuth = useConvexAuth();
   const currentUser = useQuery(api.users.current);
 
   // Graceful-unavailable probe: run the init once on mount and surface the
@@ -124,9 +125,9 @@ export function BillingPortal() {
           Current plan
         </p>
         <p className="mt-1 font-sans text-[15px] font-medium text-on-surface" data-testid="billing-current-plan">
-          {currentUser === undefined
+          {convexAuth.isLoading || currentUser === undefined
             ? "…"
-            : currentUser === null
+            : convexAuth.isAuthenticated === false || currentUser === null
               ? "Sign in to view"
               : planLabel(currentUser.subscriptionStatus, currentUser.subscriptionTier)}
         </p>
@@ -140,8 +141,9 @@ export function BillingPortal() {
 
       {paddleReady === false && (
         <p className="rounded-md border border-warning/60 bg-warning/10 px-4 py-3 font-sans text-[13px] leading-[1.5] text-warning">
-          Billing is not configured yet (missing client token). See
-          docs/HANDOFF.md for the setup checklist.
+          Billing isn&apos;t available on this deployment — the Paddle client
+          token wasn&apos;t included at build time. Check the deployment&apos;s
+          build variables (see console for the exact signal).
         </p>
       )}
 
