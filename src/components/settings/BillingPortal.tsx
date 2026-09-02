@@ -1,15 +1,15 @@
 "use client";
 
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
+import { useAction, useQuery, useConvexAuth } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { initPaddle, startCheckout } from "../../lib/paddle";
+import { planDisplay } from "../../lib/planDisplay";
 
 /**
- * BillingPortal — TASK-062 (PRD FR-011).
+ * BillingPortal — TASK-062/068 (PRD FR-011, US-014/015/016).
  *
  * Two tier cards opening the Paddle overlay checkout (sandbox-first):
  *   - Price IDs from NEXT_PUBLIC_PADDLE_PRICE_* env (sandbox `pri_…` now,
@@ -19,11 +19,12 @@ import { initPaddle, startCheckout } from "../../lib/paddle";
  *   - After payment Paddle redirects to /settings/billing?upgraded=1 →
  *     success banner. Convex state does NOT change from this screen — the
  *     webhook is the source of truth (063/064).
- *   - Graceful "billing unavailable" when the client token is absent:
- *     initPaddle() resolves false and the upgrade buttons disable.
+ *   - Graceful "billing unavailable" when the client token is absent.
  *
- * "Manage subscription" (customer portal) and richer plan display land at
- * TASK-068 per the roadmap split.
+ * TASK-068: rich current-plan block via the shared planDisplay helper, and
+ * "Manage subscription" → Paddle customer portal (convex/billing.ts creates
+ * an authenticated session for the CALLER'S OWN paddleCustomerId; hidden
+ * for users who never purchased).
  */
 
 const TIERS = [
@@ -31,7 +32,7 @@ const TIERS = [
     key: "creator" as const,
     label: "Creator",
     price: "$12/mo",
-    blurb: "25 posts a month across 4 platforms.",
+    blurb: "25 posts a month across all 6 platforms.",
     priceId: process.env.NEXT_PUBLIC_PADDLE_PRICE_CREATOR ?? "",
   },
   {
@@ -43,28 +44,21 @@ const TIERS = [
   },
 ];
 
-function planLabel(
-  status: string,
-  tier?: "creator" | "pro",
-): string {
-  if (status === "active") return tier === "pro" ? "Pro" : "Creator";
-  if (status === "trial") return "Trial";
-  if (status === "expired") return "Expired";
-  if (status === "canceled") return "Canceled";
-  return status;
-}
-
 export function BillingPortal() {
   const { isSignedIn, user } = useUser();
   const searchParams = useSearchParams();
   const convexAuth = useConvexAuth();
   const currentUser = useQuery(api.users.current);
+  const createPortalSession = useAction(api.billing.createPortalSession);
 
   // Graceful-unavailable probe: run the init once on mount and surface the
   // honest result (false = no token / init failed).
   const [paddleReady, setPaddleReady] = useState<boolean | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [portalOpening, setPortalOpening] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Mount-time snapshot (React Compiler purity — see planDisplay.ts).
+  const [now] = useState(() => Date.now());
 
   useEffect(() => {
     if (!isSignedIn) return;
@@ -84,7 +78,7 @@ export function BillingPortal() {
   const upgraded = searchParams.get("upgraded") === "1";
   const currentTier =
     currentUser?.subscriptionStatus === "active"
-      ? (currentUser.subscriptionTier ?? null)
+      ? (currentUser.subscriptionTier ?? "creator")
       : null;
 
   async function handleUpgrade(tierKey: "creator" | "pro", priceId: string) {
@@ -107,6 +101,35 @@ export function BillingPortal() {
     }
   }
 
+  async function handlePortal() {
+    if (portalOpening) return;
+    setPortalOpening(true);
+    setNotice(null);
+    try {
+      const { url } = await createPortalSession({});
+      if (url) {
+        window.open(url, "_blank", "noopener");
+      } else {
+        setNotice("No billing account yet — upgrade first, then manage it here.");
+      }
+    } catch {
+      setNotice("Couldn't open the billing portal. Try again.");
+    } finally {
+      setPortalOpening(false);
+    }
+  }
+
+  const plan =
+    currentUser === null || currentUser === undefined
+      ? null
+      : planDisplay(currentUser, {
+          monthlyPostCount: undefined,
+          now,
+        });
+  const hasPaddleAccount =
+    typeof currentUser?.paddleCustomerId === "string" &&
+    currentUser.paddleCustomerId.length > 0;
+
   return (
     <div className="flex flex-col gap-6" data-testid="billing-portal">
       {upgraded && (
@@ -120,17 +143,40 @@ export function BillingPortal() {
         </p>
       )}
 
-      <div>
+      <div className="rounded-lg border border-border bg-surface p-6">
         <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
           Current plan
         </p>
-        <p className="mt-1 font-sans text-[15px] font-medium text-on-surface" data-testid="billing-current-plan">
-          {convexAuth.isLoading || currentUser === undefined
-            ? "…"
-            : convexAuth.isAuthenticated === false || currentUser === null
-              ? "Sign in to view"
-              : planLabel(currentUser.subscriptionStatus, currentUser.subscriptionTier)}
-        </p>
+        {convexAuth.isLoading || currentUser === undefined || plan === null ? (
+          <div className="mt-2 space-y-2">
+            <span className="inline-block h-6 w-32 animate-pulse rounded bg-muted" />
+            <span className="inline-block h-4 w-48 animate-pulse rounded bg-muted" />
+          </div>
+        ) : (
+          <div className="mt-2">
+            <p
+              className="font-sans text-[22px] font-semibold text-on-surface"
+              data-testid="billing-current-plan"
+            >
+              {plan.label}
+            </p>
+            <p className="mt-1 font-sans text-[13px] leading-[1.5] text-on-surface-muted">
+              {plan.detail}
+              {plan.note ? ` · ${plan.note}` : ""}
+            </p>
+            {hasPaddleAccount && (
+              <button
+                type="button"
+                onClick={handlePortal}
+                disabled={portalOpening}
+                data-testid="billing-manage-subscription"
+                className="mt-4 inline-flex h-10 items-center justify-center rounded-md border-2 border-border-strong bg-surface-raised px-4 font-sans text-[13px] font-medium text-on-surface transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
+              >
+                {portalOpening ? "Opening portal…" : "Manage subscription"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {notice && (
@@ -188,12 +234,9 @@ export function BillingPortal() {
       </div>
 
       <p className="font-sans text-[12px] leading-[1.5] text-on-surface-muted">
-        Payments are handled by Paddle (merchant of record). Need to manage an
-        existing subscription? A customer portal link arrives with{" "}
-        <Link href="/settings" className="underline">
-          billing polish
-        </Link>
-        .
+        Payments are handled by Paddle (merchant of record). Subscription
+        changes, invoices, and payment methods live in the Paddle customer
+        portal.
       </p>
     </div>
   );

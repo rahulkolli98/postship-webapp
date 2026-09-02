@@ -33,5 +33,8 @@ export default defineApp({
     PADDLE_WEBHOOK_SECRET: v.optional(v.string()),
     PADDLE_PRICE_CREATOR: v.optional(v.string()),
     PADDLE_PRICE_PRO: v.optional(v.string()),
+    // TASK-068: server-side API key for Paddle customer portal sessions.
+    // Sandbox key (pdl_sdbx_…) now; live key flips in at TASK-081.
+    PADDLE_API_KEY: v.optional(v.string()),
   },
 });

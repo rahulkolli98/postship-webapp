@@ -35,6 +35,7 @@ type Env = {
   readonly OPENAI_API_KEY: string | undefined;
   readonly OPENROUTER_API_KEY: string | undefined;
   readonly OPENROUTER_MODEL: string | undefined;
+  readonly PADDLE_API_KEY: string | undefined;
   readonly PADDLE_PRICE_CREATOR: string | undefined;
   readonly PADDLE_PRICE_PRO: string | undefined;
   readonly PADDLE_WEBHOOK_SECRET: string | undefined;
