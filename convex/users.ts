@@ -78,6 +78,8 @@ export const getByClerkId = internalQuery({
       paddleCustomerId: v.optional(v.string()),
       trialStartedAt: v.optional(v.number()),
       trialPostsUsed: v.optional(v.number()),
+      regensUsedDay: v.optional(v.number()),
+      regensDayStamp: v.optional(v.number()),
     }),
     v.null(),
   ),
@@ -176,7 +178,7 @@ export const resetTrialPosts = internalMutation({
 });
 
 /**
- * TASK-066 test lever: set a user's trialStartedAt to an arbitrary
+ * TASK-067 test lever: set a user's trialStartedAt to an arbitrary
  * timestamp (e.g. 8 days ago to verify TRIAL_EXPIRED, or now to re-open a
  * trial for counter testing). Internal-only (no client reach); run via the
  * Convex dashboard function runner with {"clerkUserId":"user_…",
@@ -194,6 +196,54 @@ export const devSetTrialStartedAt = internalMutation({
       throw new Error(`Unknown clerkUserId: ${clerkUserId.slice(0, 12)}…`);
     }
     await ctx.db.patch(user._id, { trialStartedAt: startedAt });
+    return null;
+  },
+});
+
+// ── TASK-067: daily regeneration usage ──────────────────────────────────
+
+/** UTC midnight of `at` — the lazily-compared day stamp. */
+export function utcDayStart(at: number): number {
+  const d = new Date(at);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
+ * TASK-067: bump the daily regen counter with lazy day rollover. Called
+ * AFTER a successful regeneration (failed AI calls don't burn the cap).
+ * The ship/gate side reads regensUsedDay only when regensDayStamp matches
+ * today's stamp — a stale stamp means the counter is already 0.
+ */
+export const bumpRegenUsage = internalMutation({
+  args: { userId: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (user === null) return null;
+    const today = utcDayStart(Date.now());
+    const used =
+      user.regensDayStamp === today ? (user.regensUsedDay ?? 0) + 1 : 1;
+    await ctx.db.patch(userId, {
+      regensUsedDay: used,
+      regensDayStamp: today,
+    });
+    return null;
+  },
+});
+
+/** TASK-067 test lever: zero a user's daily regen counter. */
+export const devResetRegens = internalMutation({
+  args: { clerkUserId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { clerkUserId }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique();
+    if (user === null) {
+      throw new Error(`Unknown clerkUserId: ${clerkUserId.slice(0, 12)}…`);
+    }
+    await ctx.db.patch(user._id, { regensUsedDay: 0 });
     return null;
   },
 });

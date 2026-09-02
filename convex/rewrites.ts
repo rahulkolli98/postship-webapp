@@ -2,10 +2,37 @@
 
 import { action } from "./_generated/server";
 import { v } from "convex/values";
+import { ConvexError } from "convex/values";
 import { env } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { PROMPTS, type Platform } from "../src/lib/ai/prompts";
 import { generateWithOpenRouter } from "../src/lib/ai/openrouter";
+
+/**
+ * TASK-067: daily regeneration caps (mode:"regenerate" only). Full
+ * generations stay ungated here — they're metered by post limits at ship,
+ * and trial users can always write captions ("drafts always allowed").
+ * Counters live on the user row (regensUsedDay/regensDayStamp) with lazy
+ * UTC-day rollover; bumped AFTER successful generation so failed AI calls
+ * never burn the cap.
+ */
+const REGEN_DAILY_CAPS = {
+  pro: Number.POSITIVE_INFINITY,
+  creator: 50,
+  trial: 10,
+} as const;
+
+type RegenTier = keyof typeof REGEN_DAILY_CAPS;
+
+function regenTierOf(user: {
+  subscriptionStatus: "trial" | "active" | "expired" | "canceled";
+  subscriptionTier?: "creator" | "pro";
+}): RegenTier {
+  if (user.subscriptionStatus === "active") {
+    return user.subscriptionTier === "pro" ? "pro" : "creator";
+  }
+  return "trial";
+}
 
 /**
  * rewrites.generate — TASK-043 (PRD § 4 FR-005).
@@ -106,6 +133,32 @@ export const generate = action({
     // requires sign-in. A future assertUserCanPost() check can be added
     // here when rate-limit/trial-post enforcement moves earlier.
 
+    // TASK-067: daily regen cap check (mode:"regenerate" only).
+    const regenTier = regenTierOf(user);
+    const regenCap = REGEN_DAILY_CAPS[regenTier];
+    if (args.mode === "regenerate") {
+      // UTC-day stamp check mirrors users.bumpRegenUsage.
+      const d = new Date();
+      const dayStamp = Date.UTC(
+        d.getUTCFullYear(),
+        d.getUTCMonth(),
+        d.getUTCDate(),
+      );
+      const used =
+        user.regensDayStamp === dayStamp ? (user.regensUsedDay ?? 0) : 0;
+      if (used >= regenCap) {
+        throw new ConvexError({
+          code: "REGEN_LIMIT_REACHED",
+          message:
+            regenTier === "pro"
+              ? "Daily regeneration limit reached."
+              : `Daily regeneration limit reached (${regenCap}/day on ${
+                  regenTier === "trial" ? "trial" : "Creator"
+                }). ${regenTier === "trial" ? "Upgrade" : "Upgrade to Pro"} for more.`,
+        });
+      }
+    }
+
     const apiKey = resolveApiKey();
     if (!apiKey) {
       throw new Error(
@@ -165,6 +218,14 @@ export const generate = action({
       } catch {
         youtube = { title: youtubeRaw.slice(0, 60), description: youtubeRaw, tags: [] };
       }
+    }
+
+    // TASK-067: count the regeneration AFTER success — failed AI calls
+    // never burn the daily cap.
+    if (args.mode === "regenerate") {
+      await ctx.runMutation(internal.users.bumpRegenUsage, {
+        userId: user._id,
+      });
     }
 
     return {

@@ -56,6 +56,7 @@ function Badge({ tone, children }: { tone: Tone; children: React.ReactNode }) {
 
 function TrialBadge() {
   const me = useQuery(api.users.current);
+  const usage = useQuery(api.posts.monthlyUsage);
   // Mount-time snapshot: the countdown badge doesn't need per-frame
   // precision, and a render-phase Date.now() trips the React Compiler
   // purity rule. One stable read per mount is the intended behavior.
@@ -71,10 +72,18 @@ function TrialBadge() {
 
   const status = me.subscriptionStatus;
 
-  // Paid tiers — no trial language for paying users.
+  // Paid tiers — real usage for Creator; Pro is unlimited.
   if (status === "active") {
-    const tier = me.subscriptionTier === "pro" ? "Pro" : "Creator";
-    return <Badge tone="paid">{tier} plan</Badge>;
+    if (me.subscriptionTier === "pro") {
+      return <Badge tone="paid">Pro plan · unlimited</Badge>;
+    }
+    return (
+      <Badge tone="paid">
+        {usage === undefined
+          ? "Creator plan"
+          : `Creator · ${usage.monthlyPostCount} of 25 this month`}
+      </Badge>
+    );
   }
   if (status === "expired" || status === "canceled") {
     return <Badge tone="warning">Plan ended · Upgrade to keep posting</Badge>;

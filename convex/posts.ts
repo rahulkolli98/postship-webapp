@@ -193,6 +193,43 @@ export const getOwned = internalQuery({
   },
 });
 
+/**
+ * TASK-067: non-draft posts the user created since `since` (rolling 30-day
+ * window) — the Creator monthly-ship metric. Rolling = capacity frees up
+ * as old posts age past the window (no calendar reset).
+ */
+export const countRecentPosts = internalQuery({
+  args: { userId: v.id("users"), since: v.number() },
+  returns: v.number(),
+  handler: async (ctx, { userId, since }) => {
+    const rows = await ctx.db
+      .query("posts")
+      .withIndex("by_userId_createdAt", (q) =>
+        q.eq("userId", userId).gte("createdAt", since),
+      )
+      .collect();
+    return rows.filter((r) => r.status !== "draft").length;
+  },
+});
+
+/** TASK-067: public monthly usage for the billing counter (paid Creator). */
+export const monthlyUsage = query({
+  args: {},
+  returns: v.object({ monthlyPostCount: v.number() }),
+  handler: async (ctx): Promise<{ monthlyPostCount: number }> => {
+    const user = await getCurrentUser(ctx);
+    if (user === null) {
+      return { monthlyPostCount: 0 };
+    }
+    return {
+      monthlyPostCount: await ctx.runQuery(internal.posts.countRecentPosts, {
+        userId: user._id,
+        since: Date.now() - 30 * 24 * 60 * 60 * 1000,
+      }),
+    };
+  },
+});
+
 /** Merge per-platform ship results into the stored platformResults. */
 export const applyShipUpdate = internalMutation({
   args: {
@@ -255,8 +292,13 @@ export const ship = action({
     });
     if (user === null) throw new Error("Not authenticated");
 
-    // ── Gate (trial window/quota; tiers expand in TASK-067) ────────────
-    assertUserCanPost(user);
+    // ── Gate (trial window/quota + TASK-067 tier caps) ─────────────────
+    // Creator: 25 posts / rolling 30 days (counted, not counter-maintained).
+    const monthlyPostCount = await ctx.runQuery(internal.posts.countRecentPosts, {
+      userId: user._id,
+      since: Date.now() - 30 * 24 * 60 * 60 * 1000,
+    });
+    assertUserCanPost(user, { monthlyPostCount });
 
     // ── Post + ownership ───────────────────────────────────────────────
     const post = await ctx.runQuery(internal.posts.getOwned, {
@@ -1162,6 +1204,65 @@ export const purgePostMedia = internalMutation({
       await ctx.storage.delete(video.storageId);
     }
     await ctx.db.patch(postId, { videos: [], mediaDeletedAt: Date.now() });
+    return null;
+  },
+});
+
+// ── Dev levers (TASK-067 verification; internal-only) ───────────────────
+
+/**
+ * TASK-067 test lever: insert `count` minimal SHIPPED post rows inside the
+ * rolling 30-day window so the Creator 25-cap is testable without 25 real
+ * ships. Run via the Convex dashboard function runner.
+ */
+export const devSeedMonthlyPosts = internalMutation({
+  args: { clerkUserId: v.string(), count: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { clerkUserId, count }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique();
+    if (user === null) {
+      throw new Error(`Unknown clerkUserId: ${clerkUserId.slice(0, 12)}…`);
+    }
+    const emptyRewrites = {
+      youtube: { title: "", description: "", tags: [] },
+      linkedin: "",
+      x: "",
+      threads: "",
+      instagram: "",
+      tiktok: "",
+    };
+    const emptyPairings = {
+      youtube: "",
+      linkedin: "",
+      x: "",
+      threads: "",
+      instagram: "",
+      tiktok: "",
+    };
+    const now = Date.now();
+    for (let i = 0; i < count; i++) {
+      await ctx.db.insert("posts", {
+        userId: user._id,
+        masterDescription: "dev seed (TASK-067 verification)",
+        videos: [],
+        rewrites: emptyRewrites,
+        pairings: emptyPairings,
+        platforms: [],
+        platformResults: {
+          youtube: { status: "posted" },
+          linkedin: { status: "posted" },
+          x: { status: "posted" },
+          threads: { status: "posted" },
+          instagram: { status: "posted" },
+          tiktok: { status: "posted" },
+        },
+        publishedAt: now,
+        createdAt: now,
+      });
+    }
     return null;
   },
 });

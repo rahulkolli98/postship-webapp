@@ -356,10 +356,26 @@ function ComposerCanvas() {
       // Selective merge: fresh has "" for non-requested platforms — a naive
       // spread would wipe the other five cards.
       setRewrites((prev) => (prev ? mergeRewrites(prev, fresh, [platform]) : prev));
-    } catch {
-      setGenerateError(
-        `Couldn't regenerate ${PLATFORM_LABELS[platform]}. Try again.`,
-      );
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      let code = "";
+      let text = "";
+      try {
+        const parsed = JSON.parse(raw) as { code?: string; message?: string };
+        code = parsed?.code ?? "";
+        text = parsed?.message ?? "";
+      } catch {
+        /* plain error string */
+      }
+      if (code === "REGEN_LIMIT_REACHED") {
+        setGenerateError(
+          text || "Daily regeneration limit reached — upgrade for more.",
+        );
+      } else {
+        setGenerateError(
+          `Couldn't regenerate ${PLATFORM_LABELS[platform]}. Try again.`,
+        );
+      }
     } finally {
       setRegenerating((prev) => {
         const next = new Set(prev);
@@ -461,7 +477,12 @@ function ComposerCanvas() {
         setShipError({ text: "Session expired. Refresh and sign in again." });
       } else if (code === "NO_CONNECTIONS") {
         setShipError({ text: text || "No platforms connected.", connect: true });
-      } else if (code === "TRIAL_EXPIRED" || code === "TRIAL_EXHAUSTED" || code === "UPGRADE_REQUIRED") {
+      } else if (
+        code === "TRIAL_EXPIRED" ||
+        code === "TRIAL_EXHAUSTED" ||
+        code === "CREATOR_POST_LIMIT" ||
+        code === "UPGRADE_REQUIRED"
+      ) {
         setShipError({ text: text || "Upgrade to keep publishing.", upgrade: true });
       } else if (/PUBLISHING_NOT_CONFIGURED/i.test(raw)) {
         setShipError({ text: "Publishing backend not configured. Set POSTFORME_API_KEY (see docs/HANDOFF.md)." });

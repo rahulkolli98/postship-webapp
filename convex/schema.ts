@@ -43,6 +43,11 @@ export default defineSchema({
     // Trial tracking (7 days / 5 posts lifetime)
     trialStartedAt: v.optional(v.number()),
     trialPostsUsed: v.optional(v.number()),
+    // TASK-067: daily regeneration usage (mode:"regenerate" only). Stamp =
+    // start-of-day (UTC) when the counter was last bumped; a different
+    // stamp means the counter is stale and resets to 0 lazily.
+    regensUsedDay: v.optional(v.number()),
+    regensDayStamp: v.optional(v.number()),
   })
     .index("by_clerkUserId", ["clerkUserId"])
     .index("by_email", ["email"]),
