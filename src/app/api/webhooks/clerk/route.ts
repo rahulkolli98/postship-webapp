@@ -5,6 +5,7 @@ import type { WebhookEvent } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/../convex/_generated/api";
 import { sendEmail, welcomeEmail, DEFAULT_APP_URL } from "@/lib/email";
+import { captureServerEvent, POSTHOG_EVENTS } from "@/lib/postHog";
 
 /**
  * Clerk webhook receiver — TASK-018 (PRD § 4, § 9).
@@ -89,6 +90,22 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await convex.mutation(api.users.upsertFromClerk, fields);
+
+    // TASK-070: sign_up + trial_started fire exactly once, on row creation.
+    // Awaited on purpose — CF workers kill un-awaited work after the
+    // response. No PII in props: the distinct_id is the clerk user id.
+    if (result.created) {
+      await captureServerEvent(
+        fields.clerkUserId,
+        POSTHOG_EVENTS.SIGN_UP,
+        {},
+      );
+      await captureServerEvent(
+        fields.clerkUserId,
+        POSTHOG_EVENTS.TRIAL_STARTED,
+        {},
+      );
+    }
 
     // TASK-069: welcome email on FIRST-EVER signup only (user.updated and
     // repeat user.created events stay silent). Fire-and-log: an email

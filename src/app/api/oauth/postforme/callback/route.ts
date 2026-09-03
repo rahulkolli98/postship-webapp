@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { currentUser } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/../convex/_generated/api";
+import { captureServerEvent, POSTHOG_EVENTS } from "@/lib/postHog";
 
 /**
  * TASK-053 — Post for Me OAuth CALLBACK / SYNC.
@@ -125,6 +126,14 @@ export async function GET(request: Request) {
         accessToken: PFM_MANAGED_TOKEN,
       });
       synced++;
+    }
+
+    // TASK-070: connect_platform fires per successful sync pass with the
+    // number of rows upserted (0-sync passes stay silent).
+    if (synced > 0) {
+      await captureServerEvent(session.id, POSTHOG_EVENTS.CONNECT_PLATFORM, {
+        platforms_synced: synced,
+      });
     }
 
     const origin = new URL(request.url).origin;

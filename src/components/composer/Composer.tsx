@@ -19,6 +19,8 @@ import { ShipButton } from "./ShipButton";
 import { PublishProgress } from "./PublishProgress";
 import { computeDefaultPairings, type Orientation } from "../../lib/aspectRatio";
 import type { PublishResult } from "../../../src/lib/publishing/types";
+import posthog from "posthog-js";
+import { POSTHOG_EVENTS } from "../../lib/postHog";
 
 /**
  * Composer — TASK-023 (empty state) → TASK-045 (full wiring).
@@ -329,6 +331,11 @@ function ComposerCanvas() {
       // TASK-045b: overwrites all SELECTED cards (hinted on the button);
       // deselected cards keep whatever they had.
       setRewrites((prev) => (prev ? mergeRewrites(prev, result, platforms) : result));
+      // TASK-070: generate event (client-side; posthog-js no-ops when the
+      // provider isn't configured).
+      if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
+        posthog.capture(POSTHOG_EVENTS.GENERATE, { platforms: platforms.length });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/AI not configured/i.test(msg)) {
@@ -461,6 +468,12 @@ function ComposerCanvas() {
       const res = await shipPost({ postId });
       setShippedPostId(postId);
       setShipResults(res.results);
+      // TASK-070: post_shipped with the platform outcome counts.
+      if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
+        posthog.capture(POSTHOG_EVENTS.POST_SHIPPED, {
+          platforms: Object.keys(res.results).length,
+        });
+      }
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       let parsed: { message?: string; code?: string } | null = null;

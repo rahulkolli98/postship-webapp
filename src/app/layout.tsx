@@ -3,6 +3,7 @@ import { shadcn } from "@clerk/ui/themes";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
+import { PostHogProvider } from "@/components/PostHogProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -39,8 +40,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <ClerkProvider appearance={{ theme: shadcn }}>
-          {/* Convex inside Clerk — Convex mints tokens from Clerk context */}
-          <ConvexClientProvider>{children}</ConvexClientProvider>
+          {/* PostHog inside Clerk — identify() reads Clerk context.
+              TASK-070: env-driven no-op without NEXT_PUBLIC_POSTHOG_KEY. */}
+          <PostHogProvider>
+            {/* Convex inside Clerk — Convex mints tokens from Clerk context */}
+            <ConvexClientProvider>{children}</ConvexClientProvider>
+          </PostHogProvider>
         </ClerkProvider>
       </body>
     </html>
