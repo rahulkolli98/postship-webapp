@@ -12,6 +12,7 @@ import type * as _guards from "../_guards.js";
 import type * as accounts from "../accounts.js";
 import type * as billing from "../billing.js";
 import type * as crons from "../crons.js";
+import type * as emails from "../emails.js";
 import type * as posts from "../posts.js";
 import type * as rewrites from "../rewrites.js";
 import type * as subscriptions from "../subscriptions.js";
@@ -29,6 +30,7 @@ declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   billing: typeof billing;
   crons: typeof crons;
+  emails: typeof emails;
   posts: typeof posts;
   rewrites: typeof rewrites;
   subscriptions: typeof subscriptions;

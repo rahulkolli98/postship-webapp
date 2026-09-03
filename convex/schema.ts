@@ -48,6 +48,9 @@ export default defineSchema({
     // stamp means the counter is stale and resets to 0 lazily.
     regensUsedDay: v.optional(v.number()),
     regensDayStamp: v.optional(v.number()),
+    // TASK-069: trial-expiry-24h notice sent (daily cron marks this so
+    // nobody gets the email twice).
+    trialExpiryNotified: v.optional(v.boolean()),
   })
     .index("by_clerkUserId", ["clerkUserId"])
     .index("by_email", ["email"]),

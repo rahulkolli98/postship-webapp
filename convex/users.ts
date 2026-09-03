@@ -6,6 +6,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import { QueryCtx, MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 /**
  * Shared helper (PRD § 4): resolve the Clerk identity to the Convex users
@@ -113,8 +114,13 @@ export const upsertFromClerk = mutation({
     displayName: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
   },
-  returns: v.id("users"),
-  handler: async (ctx, args) => {
+  returns: v.object({
+    userId: v.id("users"),
+    // TASK-069: true when this call CREATED the row (first-ever signup) —
+    // the Clerk webhook route fires the welcome email only then.
+    created: v.boolean(),
+  }),
+  handler: async (ctx, args): Promise<{ userId: Id<"users">; created: boolean }> => {
     const existing = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.clerkUserId))
@@ -126,11 +132,11 @@ export const upsertFromClerk = mutation({
         displayName: args.displayName,
         avatarUrl: args.avatarUrl,
       });
-      return existing._id;
+      return { userId: existing._id, created: false };
     }
 
     const now = Date.now();
-    return await ctx.db.insert("users", {
+    const userId = await ctx.db.insert("users", {
       clerkUserId: args.clerkUserId,
       email: args.email,
       displayName: args.displayName,
@@ -140,6 +146,7 @@ export const upsertFromClerk = mutation({
       trialStartedAt: now,
       trialPostsUsed: 0,
     });
+    return { userId, created: true };
   },
 });
 

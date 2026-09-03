@@ -30,8 +30,10 @@ import type { DataModel } from "./dataModel.js";
 type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
+  readonly APP_URL: string | undefined;
   readonly CLERK_JWT_ISSUER_DOMAIN: string | undefined;
   readonly DEEPSEEK_API_KEY: string | undefined;
+  readonly EMAIL_FROM: string | undefined;
   readonly OPENAI_API_KEY: string | undefined;
   readonly OPENROUTER_API_KEY: string | undefined;
   readonly OPENROUTER_MODEL: string | undefined;
@@ -41,6 +43,7 @@ type Env = {
   readonly PADDLE_WEBHOOK_SECRET: string | undefined;
   readonly POSTFORME_API_KEY: string | undefined;
   readonly POSTFORME_WEBHOOK_SECRET: string | undefined;
+  readonly RESEND_API_KEY: string | undefined;
 };
 
 /**

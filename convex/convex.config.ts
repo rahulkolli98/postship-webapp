@@ -36,5 +36,14 @@ export default defineApp({
     // TASK-068: server-side API key for Paddle customer portal sessions.
     // Sandbox key (pdl_sdbx_…) now; live key flips in at TASK-081.
     PADDLE_API_KEY: v.optional(v.string()),
+    // TASK-069: Resend transactional email. The cron (Convex side) reads
+    // RESEND_API_KEY here; the Clerk webhook route (Cloudflare side) reads
+    // the same-named secret from its own runtime — same key value in both
+    // places (same pattern as POSTFORME_API_KEY).
+    RESEND_API_KEY: v.optional(v.string()),
+    // Sender override (default "Postship <onboarding@resend.dev>" until the
+    // postship.app domain is verified at launch) and the email CTA target.
+    EMAIL_FROM: v.optional(v.string()),
+    APP_URL: v.optional(v.string()),
   },
 });

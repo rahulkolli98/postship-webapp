@@ -11,4 +11,16 @@ const crons = cronJobs();
  */
 crons.interval("media-sweep", { hours: 24 }, internal.posts.sweepMedia, {});
 
+/**
+ * TASK-069: trial-expiry-24h notice, daily at 14:00 UTC. Emails trial
+ * users whose 7-day clock expires within the next 24h (marks
+ * trialExpiryNotified so nobody gets it twice).
+ */
+crons.daily(
+  "trial-expiry-emails",
+  { hourUTC: 14, minuteUTC: 0 },
+  internal.emails.sendTrialExpiryEmails,
+  {},
+);
+
 export default crons;

@@ -4,6 +4,7 @@ import { verifyWebhook } from "@clerk/nextjs/webhooks";
 import type { WebhookEvent } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/../convex/_generated/api";
+import { sendEmail, welcomeEmail, DEFAULT_APP_URL } from "@/lib/email";
 
 /**
  * Clerk webhook receiver — TASK-018 (PRD § 4, § 9).
@@ -87,8 +88,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const userId = await convex.mutation(api.users.upsertFromClerk, fields);
-    return NextResponse.json({ ok: true, handled: true, userId });
+    const result = await convex.mutation(api.users.upsertFromClerk, fields);
+
+    // TASK-069: welcome email on FIRST-EVER signup only (user.updated and
+    // repeat user.created events stay silent). Fire-and-log: an email
+    // failure never fails the webhook (the row exists; no retry needed).
+    if (result.created) {
+      const apiKey = process.env.RESEND_API_KEY;
+      if (!apiKey) {
+        console.error(
+          "[clerk-webhook] RESEND_API_KEY not set — welcome email skipped",
+        );
+      } else {
+        try {
+          const tpl = welcomeEmail(
+            process.env.APP_URL ?? DEFAULT_APP_URL,
+          );
+          const sent = await sendEmail({
+            apiKey,
+            to: fields.email,
+            subject: tpl.subject,
+            html: tpl.html,
+            idempotencyKey: `welcome-${fields.clerkUserId}`,
+          });
+          if (!sent.ok) {
+            console.error("[clerk-webhook] welcome email failed to send");
+          }
+        } catch (emailErr) {
+          console.error("[clerk-webhook] welcome email error:", emailErr);
+        }
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      handled: true,
+      userId: result.userId,
+    });
   } catch (err) {
     // Log full detail server-side; return a generic body (no internals leak).
     console.error("[clerk-webhook] Convex mutation failed:", err);
