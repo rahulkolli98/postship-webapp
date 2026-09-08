@@ -20,6 +20,7 @@ import { PublishProgress } from "./PublishProgress";
 import { computeDefaultPairings, type Orientation } from "../../lib/aspectRatio";
 import type { PublishResult } from "../../../src/lib/publishing/types";
 import posthog from "posthog-js";
+import { toast } from "sonner";
 import { POSTHOG_EVENTS } from "../../lib/postHog";
 
 /**
@@ -168,6 +169,23 @@ function ComposerCanvas() {
   const [selected, setSelected] = useState<Set<Platform>>(new Set());
   const selectionHydrated = useRef(false);
 
+  // TASK-072: first-visit onboarding, localStorage-flagged. Lazy init is
+  // safe from hydration mismatch — the callout only renders inside the
+  // accounts-loaded branch, which never exists during SSR/hydration. One
+  // dismiss (or one uploaded video) and it never comes back.
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(
+    () => !hasSeenOnboarding(),
+  );
+
+  function dismissOnboarding() {
+    try {
+      localStorage.setItem(ONBOARDING_FLAG, "1");
+    } catch {
+      /* private-mode storage — the session-only dismissal still applies */
+    }
+    setShowOnboarding(false);
+  }
+
   function togglePlatform(platform: Platform) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -314,6 +332,8 @@ function ComposerCanvas() {
       console.error("[draft] save failed:", err);
       setSaveState("error");
       setTimeout(() => setSaveState("idle"), 4000);
+      // TASK-073: secondary signal — the button alone is easy to miss.
+      toast.error("Draft didn't save. Try again.");
     }
   }
 
@@ -577,6 +597,10 @@ function ComposerCanvas() {
           </div>
         ) : (
           <div className="flex flex-col gap-10">
+            {/* TASK-072: first-visit onboarding; hides once a video lands. */}
+            {showOnboarding && uploads.length === 0 && (
+              <OnboardingCallout onDismiss={dismissOnboarding} />
+            )}
             {!hasConnections && (
               <p
                 role="status"
@@ -726,8 +750,57 @@ function ComposerCanvas() {
   );
 }
 
-function ConnectPrompt() {
+/**
+ * OnboardingCallout — TASK-072.
+ *
+ * First-visit micro-onboarding, localStorage-flagged (`postship.onboarding.v1`):
+ * one dismiss and it never comes back. Also hides the moment a video lands
+ * (render condition in ComposerCanvas). Copy follows the Vision § 4 tone
+ * table: plain-English onboarding, no exclamation marks, no journey-speak.
+ */
+const ONBOARDING_FLAG = "postship.onboarding.v1";
+
+/** Module-scope so the React Compiler can't see the storage read as
+ * render-phase — and SSR gets a safe "already seen" default. */
+function hasSeenOnboarding(): boolean {
+  try {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem(ONBOARDING_FLAG) !== null;
+  } catch {
+    return true; // private-mode storage — default to quiet
+  }
+}
+
+function OnboardingCallout({ onDismiss }: { onDismiss: () => void }) {
   return (
+    <div
+      data-testid="onboarding-callout"
+      className="rounded-md border border-border bg-surface-raised px-4 py-3"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-sans text-[14px] font-medium text-on-surface">
+            Drop a video, write one description, ship it everywhere.
+          </p>
+          <p className="mt-1 font-sans text-[13px] leading-[1.5] text-on-surface-muted">
+            1. Drop your video. 2. Write one description. 3. Pick platforms and
+            ship. Takes a couple of minutes.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          data-testid="onboarding-dismiss"
+          className="shrink-0 rounded-md px-2 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-muted transition-colors hover:bg-muted"
+        >
+          Got it
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ConnectPrompt() {  return (
     <div data-testid="composer-empty-state" className="rounded-lg border border-dashed border-border bg-surface-raised p-6">
       <p className="font-sans text-[14px] font-medium text-on-surface">
         Ready to ship? Connect your first platform.

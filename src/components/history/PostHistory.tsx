@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -104,7 +105,11 @@ export function PostHistory() {
                   <button
                     type="button"
                     data-testid={`resume-draft`}
-                    onClick={() => void resumeDraft({ draftId: d._id })}
+                    onClick={() =>
+                      void resumeDraft({ draftId: d._id }).catch(() =>
+                        toast.error("Couldn't open the draft. Try again."),
+                      )
+                    }
                     className="inline-flex h-8 items-center justify-center rounded-md border-2 border-border-strong bg-surface-raised px-3 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface transition-colors hover:bg-primary hover:text-primary-foreground"
                   >
                     Resume
@@ -112,7 +117,11 @@ export function PostHistory() {
                   <button
                     type="button"
                     aria-label="Discard draft"
-                    onClick={() => void discardDraftMutation({ draftId: d._id })}
+                    onClick={() =>
+                      void discardDraftMutation({ draftId: d._id }).catch(() =>
+                        toast.error("Couldn't discard the draft. Try again."),
+                      )
+                    }
                     className="inline-flex h-8 items-center rounded-md px-2 font-mono text-[11px] uppercase tracking-[0.08em] text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error"
                   >
                     Discard

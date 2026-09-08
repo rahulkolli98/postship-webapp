@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Authenticated, useMutation, useQuery } from "convex/react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import {
   AlertDialog,
@@ -87,7 +88,7 @@ function Panel() {
   }, []);
 
   function handleDisconnect(platform: string) {
-    void disconnectPlatform({
+    disconnectPlatform({
       platform: platform as
         | "youtube"
         | "linkedin"
@@ -95,6 +96,9 @@ function Panel() {
         | "threads"
         | "instagram"
         | "tiktok",
+    }).catch(() => {
+      // TASK-073: disconnect failures were silent before — surface them.
+      toast.error("Couldn't disconnect. Try again.");
     });
     setPending(null);
   }
