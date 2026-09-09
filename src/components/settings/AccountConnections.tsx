@@ -129,12 +129,35 @@ function Panel() {
               <p className="mt-4 max-w-[560px] font-sans text-[15px] leading-[1.55] text-on-surface-muted">
                 Connected via Post for Me. Publishing uses these on every ship.
               </p>
+              {/* TASK-075: brand-health cron flagged these rows. */}
+              {connected.some((a) => a.needsReconnect) && (
+                <p
+                  role="status"
+                  data-testid="reconnect-banner"
+                  className="mt-4 rounded-md border border-warning/60 bg-warning/10 px-4 py-3 font-sans text-[13px] leading-[1.5] text-warning"
+                >
+                  Some platforms need reconnecting. Click Connect below and
+                  approve again to fix.
+                </p>
+              )}
               <ul className="mt-6 flex flex-wrap gap-2" aria-label="Connected platforms">
                 {connected.map((a) => (
                   <li
                     key={a._id}
-                    className="flex items-center gap-1 rounded-md border border-border bg-surface-raised px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface"
+                    className={`flex items-center gap-1 rounded-md border px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.08em] ${
+                      a.needsReconnect
+                        ? "border-warning/60 bg-warning/10 text-warning"
+                        : "border-border bg-surface-raised text-on-surface"
+                    }`}
                   >
+                    {a.needsReconnect && (
+                      <span
+                        className="mr-1 rounded-sm bg-warning/20 px-1 py-0.5 text-[9px]"
+                        data-testid={`reconnect-${a.platform}`}
+                      >
+                        Reconnect required
+                      </span>
+                    )}
                     {PLATFORM_LABELS[a.platform] ?? a.platform}
                     {a.platformDisplayName ? (
                       <span className="text-on-surface-muted">

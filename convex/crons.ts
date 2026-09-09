@@ -23,4 +23,16 @@ crons.daily(
   {},
 );
 
+/**
+ * TASK-075: Post for Me brand-health check, daily at 03:00 UTC. Flags
+ * account rows whose sa_ connection is no longer connected at PFM
+ * (needsReconnect) and clears the flag when healthy again.
+ */
+crons.daily(
+  "brand-health",
+  { hourUTC: 3, minuteUTC: 0 },
+  internal.brandHealth.checkBrandHealth,
+  {},
+);
+
 export default crons;

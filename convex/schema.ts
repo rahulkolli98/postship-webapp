@@ -81,6 +81,10 @@ export default defineSchema({
     expiresAt: v.optional(v.number()),
     scopes: v.array(v.string()),
     connectedAt: v.number(),
+    // TASK-075: brand-health cron marks rows whose sa_ connection is no
+    // longer connected at Post for Me. Cleared automatically when the
+    // connection is healthy again (self-healing both directions).
+    needsReconnect: v.optional(v.boolean()),
   })
     .index("by_userId", ["userId"])
     .index("by_userId_platform", ["userId", "platform"]),

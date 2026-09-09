@@ -43,6 +43,8 @@ export const list = query({
       platformDisplayName: v.optional(v.string()),
       platformAvatarUrl: v.optional(v.string()),
       connectedAt: v.number(),
+      // TASK-075: brand-health cron flag (token-safe display field).
+      needsReconnect: v.optional(v.boolean()),
     }),
   ),
   handler: async (ctx) => {
@@ -57,14 +59,25 @@ export const list = query({
       .collect();
 
     return rows
-      .map(({ _id, platform, platformUsername, platformDisplayName, platformAvatarUrl, connectedAt }) => ({
-        _id,
-        platform,
-        platformUsername,
-        platformDisplayName,
-        platformAvatarUrl,
-        connectedAt,
-      }))
+      .map(
+        ({
+          _id,
+          platform,
+          platformUsername,
+          platformDisplayName,
+          platformAvatarUrl,
+          connectedAt,
+          needsReconnect,
+        }) => ({
+          _id,
+          platform,
+          platformUsername,
+          platformDisplayName,
+          platformAvatarUrl,
+          connectedAt,
+          needsReconnect,
+        }),
+      )
       .sort((a, b) => b.connectedAt - a.connectedAt);
   },
 });
