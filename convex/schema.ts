@@ -48,6 +48,11 @@ export default defineSchema({
     // stamp means the counter is stale and resets to 0 lazily.
     regensUsedDay: v.optional(v.number()),
     regensDayStamp: v.optional(v.number()),
+    // TASK-077: hourly generate usage (ALL modes — the flat abuse limiter,
+    // 20/hr for every tier). Stamp = start of the current UTC hour; a
+    // different stamp means the counter is stale and resets to 0 lazily.
+    generatesUsedHour: v.optional(v.number()),
+    generatesHourStamp: v.optional(v.number()),
     // TASK-069: trial-expiry-24h notice sent (daily cron marks this so
     // nobody gets the email twice).
     trialExpiryNotified: v.optional(v.boolean()),

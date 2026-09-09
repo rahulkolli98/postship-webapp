@@ -358,8 +358,17 @@ function ComposerCanvas() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // TASK-077: typed rate-limit payloads are JSON ({code, message}).
+      let parsed: { code?: string; message?: string } | null = null;
+      try {
+        parsed = JSON.parse(msg) as { code?: string; message?: string };
+      } catch {
+        /* plain error string */
+      }
       if (/AI not configured/i.test(msg)) {
         setGenerateError("AI not configured. Add OPENROUTER_API_KEY in webapp/.env.local and via `npx convex env set OPENROUTER_API_KEY ...`.");
+      } else if (parsed?.code === "GENERATE_RATE_LIMITED") {
+        setGenerateError(parsed.message ?? "Taking a breather. That's 20 generations in an hour. Try again in a few minutes.");
       } else {
         setGenerateError("Couldn't generate. Try again.");
       }
@@ -394,9 +403,13 @@ function ComposerCanvas() {
       } catch {
         /* plain error string */
       }
-      if (code === "REGEN_LIMIT_REACHED") {
+      if (
+        code === "REGEN_LIMIT_REACHED" ||
+        code === "GENERATE_RATE_LIMITED"
+      ) {
         setGenerateError(
-          text || "Daily regeneration limit reached — upgrade for more.",
+          text ||
+            "Daily regeneration limit reached. Try again later, or upgrade for more.",
         );
       } else {
         setGenerateError(

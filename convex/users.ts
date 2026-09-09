@@ -81,6 +81,8 @@ export const getByClerkId = internalQuery({
       trialPostsUsed: v.optional(v.number()),
       regensUsedDay: v.optional(v.number()),
       regensDayStamp: v.optional(v.number()),
+      generatesUsedHour: v.optional(v.number()),
+      generatesHourStamp: v.optional(v.number()),
     }),
     v.null(),
   ),
@@ -251,6 +253,61 @@ export const devResetRegens = internalMutation({
       throw new Error(`Unknown clerkUserId: ${clerkUserId.slice(0, 12)}…`);
     }
     await ctx.db.patch(user._id, { regensUsedDay: 0 });
+    return null;
+  },
+});
+
+// ── TASK-077: hourly generate usage (all modes) ─────────────────────────
+
+/** Start of the current UTC hour — the lazily-compared hourly stamp. */
+export function utcHourStart(at: number): number {
+  const d = new Date(at);
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    d.getUTCHours(),
+  );
+}
+
+/**
+ * TASK-077: bump the hourly generate counter with lazy hour rollover.
+ * Called AFTER a successful generation (failed AI calls don't burn the
+ * window) for BOTH modes — the flat 20/hr limiter.
+ */
+export const bumpGenerateUsage = internalMutation({
+  args: { userId: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (user === null) return null;
+    const stamp = utcHourStart(Date.now());
+    const used =
+      user.generatesHourStamp === stamp ? (user.generatesUsedHour ?? 0) + 1 : 1;
+    await ctx.db.patch(userId, {
+      generatesUsedHour: used,
+      generatesHourStamp: stamp,
+    });
+    return null;
+  },
+});
+
+/** TASK-077 test lever: set the hourly counter (0 = reset, 20 = at limit). */
+export const devSetGenerates = internalMutation({
+  args: { clerkUserId: v.string(), used: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { clerkUserId, used }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique();
+    if (user === null) {
+      throw new Error(`Unknown clerkUserId: ${clerkUserId.slice(0, 12)}…`);
+    }
+    await ctx.db.patch(user._id, {
+      generatesUsedHour: used,
+      generatesHourStamp: utcHourStart(Date.now()),
+    });
     return null;
   },
 });

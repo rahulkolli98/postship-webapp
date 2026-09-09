@@ -22,6 +22,12 @@ const REGEN_DAILY_CAPS = {
   trial: 10,
 } as const;
 
+/**
+ * TASK-077: flat hourly generate limiter — ALL modes, ALL tiers (including
+ * Pro). Distinct from the 067 tier caps, which gate regens only.
+ */
+const GEN_HOURLY_CAP = 20;
+
 type RegenTier = keyof typeof REGEN_DAILY_CAPS;
 
 function regenTierOf(user: {
@@ -133,6 +139,29 @@ export const generate = action({
     // requires sign-in. A future assertUserCanPost() check can be added
     // here when rate-limit/trial-post enforcement moves earlier.
 
+    // TASK-077: flat hourly generate limit — both modes, every tier.
+    // Checked BEFORE any AI spend; bumped after success below.
+    {
+      const d = new Date();
+      const hourStamp = Date.UTC(
+        d.getUTCFullYear(),
+        d.getUTCMonth(),
+        d.getUTCDate(),
+        d.getUTCHours(),
+      );
+      const used =
+        user.generatesHourStamp === hourStamp
+          ? (user.generatesUsedHour ?? 0)
+          : 0;
+      if (used >= GEN_HOURLY_CAP) {
+        throw new ConvexError({
+          code: "GENERATE_RATE_LIMITED",
+          message:
+            "Taking a breather. That's 20 generations in an hour. Try again in a few minutes.",
+        });
+      }
+    }
+
     // TASK-067: daily regen cap check (mode:"regenerate" only).
     const regenTier = regenTierOf(user);
     const regenCap = REGEN_DAILY_CAPS[regenTier];
@@ -221,12 +250,16 @@ export const generate = action({
     }
 
     // TASK-067: count the regeneration AFTER success — failed AI calls
-    // never burn the daily cap.
+    // never burn the daily cap. TASK-077: the hourly counter counts BOTH
+    // modes after success too.
     if (args.mode === "regenerate") {
       await ctx.runMutation(internal.users.bumpRegenUsage, {
         userId: user._id,
       });
     }
+    await ctx.runMutation(internal.users.bumpGenerateUsage, {
+      userId: user._id,
+    });
 
     return {
       youtube,
