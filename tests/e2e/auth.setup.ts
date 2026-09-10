@@ -58,6 +58,7 @@ async function ensureConnected(page: import("@playwright/test").Page) {
   const connectButton = page.getByRole("link", { name: /connect/i }).or(
     page.getByRole("link", { name: /Connect platforms/i }),
   );
+  void connectButton;
   const needsConnect = !(await page
     .locator("[data-testid^='reconnect'], [data-testid='connect-list'] li")
     .first()
