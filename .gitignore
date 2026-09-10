@@ -54,3 +54,5 @@ convex-dev.log
 lighthouse-*.json
 lh-*.json
 test-results/
+
+tests/e2e/.auth/
