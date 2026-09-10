@@ -12,6 +12,10 @@ const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/webhooks(.*)",
+  // TASK-079: legal pages are public (Paddle website verification wants
+  // privacy/terms URLs reachable without auth).
+  "/privacy",
+  "/terms",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
