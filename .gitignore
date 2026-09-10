@@ -51,3 +51,6 @@ convex-dev.log
 # cloudflare worker build
 /.open-next/
 /.wrangler/
+lighthouse-*.json
+lh-*.json
+test-results/
