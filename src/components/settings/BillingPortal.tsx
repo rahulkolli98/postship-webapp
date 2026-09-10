@@ -7,8 +7,7 @@ import { useAction, useQuery, useConvexAuth } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { initPaddle, startCheckout } from "../../lib/paddle";
 import { planDisplay } from "../../lib/planDisplay";
-import posthog from "posthog-js";
-import { POSTHOG_EVENTS } from "../../lib/postHog";
+import { captureClientEvent, POSTHOG_EVENTS } from "../../lib/postHog";
 
 /**
  * BillingPortal — TASK-062/068 (PRD FR-011, US-014/015/016).
@@ -83,7 +82,7 @@ export function BillingPortal() {
   // webhook is the provisioning truth; this is just the funnel event).
   useEffect(() => {
     if (upgraded && process.env.NEXT_PUBLIC_POSTHOG_KEY) {
-      posthog.capture(POSTHOG_EVENTS.UPGRADE_COMPLETED, {});
+      captureClientEvent(POSTHOG_EVENTS.UPGRADE_COMPLETED, {});
     }
   }, [upgraded]);
 

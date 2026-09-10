@@ -19,9 +19,11 @@ import { ShipButton } from "./ShipButton";
 import { PublishProgress } from "./PublishProgress";
 import { computeDefaultPairings, type Orientation } from "../../lib/aspectRatio";
 import type { PublishResult } from "../../../src/lib/publishing/types";
-import posthog from "posthog-js";
 import { toast } from "sonner";
-import { POSTHOG_EVENTS } from "../../lib/postHog";
+import {
+  captureClientEvent,
+  POSTHOG_EVENTS,
+} from "../../lib/postHog";
 
 /**
  * Composer — TASK-023 (empty state) → TASK-045 (full wiring).
@@ -354,7 +356,7 @@ function ComposerCanvas() {
       // TASK-070: generate event (client-side; posthog-js no-ops when the
       // provider isn't configured).
       if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
-        posthog.capture(POSTHOG_EVENTS.GENERATE, { platforms: platforms.length });
+        captureClientEvent(POSTHOG_EVENTS.GENERATE, { platforms: platforms.length });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -503,7 +505,7 @@ function ComposerCanvas() {
       setShipResults(res.results);
       // TASK-070: post_shipped with the platform outcome counts.
       if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
-        posthog.capture(POSTHOG_EVENTS.POST_SHIPPED, {
+        captureClientEvent(POSTHOG_EVENTS.POST_SHIPPED, {
           platforms: Object.keys(res.results).length,
         });
       }

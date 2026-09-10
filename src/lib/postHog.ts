@@ -35,6 +35,39 @@ export function isPostHogConfigured(): boolean {
   return PROJECT_KEY !== "";
 }
 
+// ── TASK-076: client-instance plumbing ───────────────────────────────────
+//
+// posthog-js is DYNAMICALLY imported by the provider (off the initial
+// bundle), so client components must not import it directly. The provider
+// stores the initialized instance here; component capture calls go through
+// this ref and no-op if the client hasn't loaded yet (fine — no key, or
+// the user navigated away before init resolved).
+
+type PostHogClient = {
+  identify: (id: string) => void;
+  capture: (event: string, props?: Record<string, unknown>) => void;
+};
+
+let client: PostHogClient | null = null;
+
+export function setPostHogClient(c: PostHogClient): void {
+  client = c;
+}
+
+/** Fire-and-forget client capture; silently drops when uninitialized. */
+export function captureClientEvent(
+  event: string,
+  props?: Record<string, unknown>,
+): void {
+  client?.capture(event, props);
+}
+
+/** Screen-reader-friendly mirrors live INSIDE components; this is a
+ * no-op shim so tests and call sites stay simple. */
+export function identifyClient(id: string): void {
+  client?.identify(id);
+}
+
 export async function captureServerEvent(
   distinctId: string,
   event: string,
