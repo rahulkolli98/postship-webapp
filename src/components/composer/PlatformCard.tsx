@@ -77,6 +77,7 @@ export function PlatformCard({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           rows={5}
+          aria-label={`${LABELS[platform] ?? platform} caption`}
           className="min-h-[100px] flex-1 resize-none font-sans text-[13px] leading-[1.5]"
           data-testid={`platform-input-${platform}`}
         />
@@ -88,7 +89,7 @@ export function PlatformCard({
               if (v) onVideoChange(v);
             }}
           >
-            <SelectTrigger className="w-full font-mono text-[11px]">
+            <SelectTrigger aria-label="Pair a video with this platform" className="w-full font-mono text-[11px]">
               <SelectValue placeholder="Pair video" />
             </SelectTrigger>
             <SelectContent>
@@ -149,6 +150,7 @@ export function YouTubeCard({
           value={value.title}
           onChange={(e) => onChange({ ...value, title: e.target.value })}
           placeholder="Title"
+          aria-label="YouTube title"
           className="w-full rounded-md border border-border bg-surface-raised px-3 py-2 font-sans text-[14px] font-medium text-on-surface placeholder:text-on-surface-subtle focus:border-border-strong focus:outline-none focus:ring-2 focus:ring-accent/40"
           data-testid="platform-input-youtube-title"
         />
@@ -157,6 +159,7 @@ export function YouTubeCard({
           onChange={(e) => onChange({ ...value, description: e.target.value })}
           rows={4}
           placeholder="Description"
+          aria-label="YouTube description"
           className="min-h-[80px] flex-1 resize-none font-sans text-[13px] leading-[1.5]"
           data-testid="platform-input-youtube-description"
         />
@@ -173,6 +176,7 @@ export function YouTubeCard({
             })
           }
           placeholder="Tags, comma separated"
+          aria-label="YouTube tags"
           className="w-full rounded-md border border-border bg-surface-raised px-3 py-2 font-mono text-[11px] text-on-surface placeholder:text-on-surface-subtle focus:border-border-strong focus:outline-none focus:ring-2 focus:ring-accent/40"
           data-testid="platform-input-youtube-tags"
         />
@@ -184,7 +188,7 @@ export function YouTubeCard({
               if (v) onVideoChange(v);
             }}
           >
-            <SelectTrigger className="w-full font-mono text-[11px]">
+            <SelectTrigger aria-label="Pair a video with this platform" className="w-full font-mono text-[11px]">
               <SelectValue placeholder="Pair video" />
             </SelectTrigger>
             <SelectContent>

@@ -32,14 +32,23 @@ type ResultEntry = {
 
 function StatusChip({ entry }: { entry: ResultEntry }) {
   if (entry.status === "posted") {
+    // Plain text when there's no URL — a dead <a href="#"> is an a11y trap
+    // (TASK-074).
+    if (!entry.url) {
+      return (
+        <span className="rounded-sm bg-success/10 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-success">
+          Posted
+        </span>
+      );
+    }
     return (
       <a
-        href={entry.url ?? "#"}
+        href={entry.url}
         target="_blank"
         rel="noreferrer"
         className="rounded-sm bg-success/10 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-success hover:underline"
       >
-        Posted
+        Posted ↗
       </a>
     );
   }
@@ -85,7 +94,12 @@ export function PublishProgress({
   );
 
   return (
-    <div data-testid="publish-progress" className="flex flex-col gap-2">
+    <div
+      data-testid="publish-progress"
+      // TASK-074: statuses flip async via webhooks — announce politely.
+      aria-live="polite"
+      className="flex flex-col gap-2"
+    >
       <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
         {allDone ? "Ship result" : "Shipping…"}
         {allDone && !anyFailed && entries.length > 0 ? " · all clear" : ""}

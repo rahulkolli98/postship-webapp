@@ -168,17 +168,18 @@ function Panel() {
                       open={pending === a.platform}
                       onOpenChange={(o: boolean) => setPending(o ? a.platform : null)}
                     >
-                      <AlertDialogTrigger>
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          aria-label={`Disconnect ${PLATFORM_LABELS[a.platform] ?? a.platform}`}
-                          data-testid={`disconnect-${a.platform}`}
-                          className="ml-1 inline-flex cursor-pointer rounded-sm px-1 text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error"
-                        >
-                          ×
-                        </span>
-                      </AlertDialogTrigger>
+                    <AlertDialogTrigger>
+                      {/* TASK-074: real button — native keyboard Enter/Space
+                          activation (the span role=button never did). */}
+                      <button
+                        type="button"
+                        aria-label={`Disconnect ${PLATFORM_LABELS[a.platform] ?? a.platform}`}
+                        data-testid={`disconnect-${a.platform}`}
+                        className="ml-1 inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-on-surface-subtle transition-colors hover:bg-error/10 hover:text-error focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        ×
+                      </button>
+                    </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
                           <AlertDialogTitle>

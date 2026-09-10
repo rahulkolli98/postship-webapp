@@ -8,7 +8,7 @@ export const metadata = {
  */
 export default function TermsPage() {
   return (
-    <div className="p-4 md:p-8">
+    <main className="p-4 md:p-8">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 pb-16">
         <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-on-surface-muted">
           Terms of Service
@@ -100,6 +100,6 @@ export default function TermsPage() {
           </section>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
